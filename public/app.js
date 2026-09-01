@@ -289,6 +289,12 @@ function shell(content) {
         </div>
         <div class="nav-section">${isFactory ? "工厂端" : "管理后台"}</div>
         ${nav.map(([href, label]) => `<a class="nav-link ${pathNow() === href ? "active" : ""}" href="${href}" data-link>${label}<span>›</span></a>`).join("")}
+        ${isFactory ? `
+          <div class="factory-sidebar-notice">
+            <strong>新采购单处理要求</strong>
+            <p>收到新采购单后，请在 24 小时内确认交期并完善人民币单价。逾期未确认的采购单，系统将视为无法承接，公司有权取消或重新分配。</p>
+          </div>
+        ` : ""}
       </aside>
       <section class="main">
         <header class="topbar">
