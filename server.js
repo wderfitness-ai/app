@@ -380,6 +380,27 @@ function visiblePurchaseOrder(db, po, user) {
   return base;
 }
 
+function deletePurchaseOrderRecords(db, purchaseOrderId) {
+  const qcIds = db.qc_reports.filter((qc) => qc.purchaseOrderId === purchaseOrderId).map((qc) => qc.id);
+  db.purchase_orders = db.purchase_orders.filter((po) => po.id !== purchaseOrderId);
+  db.purchase_order_items = db.purchase_order_items.filter((item) => item.purchaseOrderId !== purchaseOrderId);
+  db.qc_reports = db.qc_reports.filter((qc) => qc.purchaseOrderId !== purchaseOrderId);
+  db.qc_report_items = db.qc_report_items.filter((item) => !qcIds.includes(item.qcReportId));
+  db.payments = db.payments.filter((payment) => payment.purchaseOrderId !== purchaseOrderId);
+  db.order_files = db.order_files.filter((file) => file.purchaseOrderId !== purchaseOrderId);
+  db.order_timeline = db.order_timeline.filter((item) => !(item.orderType === "purchase_order" && item.orderId === purchaseOrderId));
+}
+
+function deleteSalesOrderRecords(db, salesOrderId) {
+  const purchaseOrderIds = db.purchase_orders.filter((po) => po.salesOrderId === salesOrderId).map((po) => po.id);
+  for (const purchaseOrderId of purchaseOrderIds) deletePurchaseOrderRecords(db, purchaseOrderId);
+  db.sales_orders = db.sales_orders.filter((order) => order.id !== salesOrderId);
+  db.sales_order_items = db.sales_order_items.filter((item) => item.salesOrderId !== salesOrderId);
+  db.payments = db.payments.filter((payment) => payment.salesOrderId !== salesOrderId);
+  db.order_files = db.order_files.filter((file) => file.salesOrderId !== salesOrderId);
+  db.order_timeline = db.order_timeline.filter((item) => !(item.orderType === "sales_order" && item.orderId === salesOrderId));
+}
+
 function listQuery(url) {
   const q = url.searchParams.get("q")?.trim().toLowerCase() || "";
   const status = url.searchParams.get("status") || "";
@@ -1456,8 +1477,11 @@ async function handleApi(req, res, db, user, url) {
       const confirm = url.searchParams.get("confirm");
       if (confirm !== "DELETE") return json(res, 400, { error: "Deletion requires confirm=DELETE" });
       const before = db.sales_orders.find((o) => o.id === resourceId);
-      db.sales_orders = db.sales_orders.filter((o) => o.id !== resourceId);
+      if (!before) return json(res, 404, { error: "Not found" });
+      const relatedPurchaseOrders = db.purchase_orders.filter((po) => po.salesOrderId === resourceId);
+      deleteSalesOrderRecords(db, resourceId);
       audit(db, user, "sales_order", resourceId, "delete", before, null);
+      audit(db, user, "sales_order", resourceId, "delete_related_records", { purchaseOrderCount: relatedPurchaseOrders.length }, null);
       await writeDb(db);
       return json(res, 200, { ok: true });
     }
@@ -1550,6 +1574,17 @@ async function handleApi(req, res, db, user, url) {
       audit(db, user, "purchase_order", po.id, "update", before, po);
       await writeDb(db);
       return json(res, 200, visiblePurchaseOrder(db, po, user));
+    }
+    if (method === "DELETE" && resourceId) {
+      if (!requireRole(user, res, [ROLE.ADMIN])) return;
+      const confirm = url.searchParams.get("confirm");
+      if (confirm !== "DELETE") return json(res, 400, { error: "Deletion requires confirm=DELETE" });
+      const before = db.purchase_orders.find((o) => o.id === resourceId);
+      if (!before) return json(res, 404, { error: "Not found" });
+      deletePurchaseOrderRecords(db, resourceId);
+      audit(db, user, "purchase_order", resourceId, "delete", before, null);
+      await writeDb(db);
+      return json(res, 200, { ok: true });
     }
   }
 
