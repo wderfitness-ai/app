@@ -175,7 +175,12 @@ function renderLogin() {
         <div id="loginFields">
         <label>邮箱 / 用户名<input class="input" name="email" value="wderfitness@gmail.com" autocomplete="username"></label>
         <div style="height:10px"></div>
-        <label>密码<input class="input" name="password" value="" type="password" autocomplete="current-password"></label>
+        <label>密码
+          <span class="password-row">
+            <input class="input" id="loginPassword" name="password" value="" type="password" autocomplete="current-password">
+            <button class="btn small" id="toggleLoginPassword" type="button">显示</button>
+          </span>
+        </label>
         </div>
         <div id="registerFields" class="hidden">
           <label>用户名<input class="input" name="name" value="" autocomplete="name"></label>
@@ -225,6 +230,12 @@ function renderLogin() {
   };
   $("#showLogin").addEventListener("click", () => setMode("login"));
   $("#showRegister").addEventListener("click", () => setMode("register"));
+  $("#toggleLoginPassword").addEventListener("click", () => {
+    const passwordInput = $("#loginPassword");
+    const visible = passwordInput.type === "text";
+    passwordInput.type = visible ? "password" : "text";
+    $("#toggleLoginPassword").textContent = visible ? "显示" : "隐藏";
+  });
   $("#roleSelect").addEventListener("change", () => {
     $("#factoryBind").classList.toggle("hidden", $("#roleSelect").value !== "Factory");
   });

@@ -67,6 +67,17 @@ a {
   color: var(--muted);
 }
 
+.password-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.password-row .input {
+  width: 100%;
+}
+
 .shell {
   min-height: 100vh;
   display: grid;
