@@ -209,7 +209,6 @@ function renderLogin() {
         </div>
         <div style="height:14px"></div>
         <button class="btn primary" style="width:100%" id="authSubmit">登录</button>
-        <p class="muted" style="margin-top:14px">可用账号：admin / sales / merch / finance / factory-a，密码均为 password123。</p>
       </form>
     </main>`;
   let mode = "login";
