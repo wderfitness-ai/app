@@ -894,6 +894,15 @@ function calculateFreightWeight(raw = {}) {
   return fallback;
 }
 
+function freightWeightAmount(value) {
+  const match = String(value || "").match(/([\d,.]+)/);
+  return match ? Number(match[1].replace(/,/g, "")) : 0;
+}
+
+function purchaseLineTotal(freightWeight, unitPrice) {
+  return Number((freightWeightAmount(freightWeight) * Number(unitPrice || 0)).toFixed(2));
+}
+
 function normalizePdfDate(value) {
   const match = String(value || "").match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
   if (!match) return today();
@@ -1961,7 +1970,6 @@ async function handleApi(req, res, db, user, url) {
           const unitPrice = Number(raw.purchaseUnitPrice ?? item.purchaseUnitPrice ?? 0);
           if (!isFactory(user)) item.quantity = quantity;
           item.purchaseUnitPrice = unitPrice;
-          item.purchaseTotal = Number((quantity * unitPrice).toFixed(2));
           if (!isFactory(user)) {
             if ("specification" in raw) item.specification = raw.specification;
             if ("qtyLabel" in raw) item.qtyLabel = raw.qtyLabel;
@@ -1972,6 +1980,7 @@ async function handleApi(req, res, db, user, url) {
             if ("colorRequirement" in raw) item.colorRequirement = raw.colorRequirement;
             if ("packagingRequirement" in raw) item.packagingRequirement = raw.packagingRequirement;
           }
+          item.purchaseTotal = purchaseLineTotal(item.freightWeight, unitPrice);
         }
       }
       po.updatedAt = now();
@@ -2191,6 +2200,7 @@ function poItem(orderId, raw) {
   const quantity = Number(raw.quantity || 0);
   const unit = Number(raw.purchaseUnitPrice ?? raw.defaultPurchasePrice ?? raw.factoryPurchasePrice ?? 0);
   const model = raw.model || "";
+  const freightWeight = calculateFreightWeight(raw);
   return {
     id: id("poi"),
     purchaseOrderId: orderId,
@@ -2200,9 +2210,9 @@ function poItem(orderId, raw) {
     specification: raw.specification || "",
     qtyLabel: raw.qtyLabel || raw.orderQty || `${quantity || 0} pcs`,
     quantity,
-    freightWeight: calculateFreightWeight(raw),
+    freightWeight,
     purchaseUnitPrice: unit,
-    purchaseTotal: Number(raw.purchaseTotal ?? quantity * unit),
+    purchaseTotal: purchaseLineTotal(freightWeight, unit),
     logoRequirement: raw.logoRequirement || "",
     logoImageData: raw.logoImageData || "",
     logoImageName: raw.logoImageName || "",
