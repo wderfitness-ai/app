@@ -564,21 +564,27 @@ function drawBoxedColumns(doc, leftTitle, leftRows, rightTitle, rightRows) {
   const y = doc.y;
   const width = doc.page.width - PDF_MARGIN * 2;
   const colWidth = width / 2;
+  const compact = Boolean(doc._pdfCompact);
+  const titleSize = compact ? 10 : 11;
+  const bodySize = compact ? 8 : 9;
+  const minHeight = compact ? 68 : 84;
+  const titleTop = compact ? 8 : 10;
+  const bodyTop = compact ? 24 : 28;
   const leftText = [leftTitle, ...leftRows.map(([label, value]) => `${label}: ${value}`)].join("\n");
   const rightText = [rightTitle, ...rightRows.map(([label, value]) => `${label}: ${value}`)].join("\n");
   const height = Math.max(
-    doc.heightOfString(leftText, { width: colWidth - 18 }) + 16,
-    doc.heightOfString(rightText, { width: colWidth - 18 }) + 16,
-    84
+    doc.heightOfString(leftText, { width: colWidth - 18 }) + 12,
+    doc.heightOfString(rightText, { width: colWidth - 18 }) + 12,
+    minHeight
   );
   ensurePdfPageSpace(doc, height);
   doc.rect(x, y, width, height).stroke(PDFKIT_COLORS.border);
   doc.moveTo(x + colWidth, y).lineTo(x + colWidth, y + height).stroke(PDFKIT_COLORS.border);
-  doc.fontSize(11).fillColor(PDFKIT_COLORS.text).text(leftTitle, x + 9, y + 10, { width: colWidth - 18 });
-  doc.fontSize(9).text(leftRows.map(([label, value]) => `${label}: ${value}`).join("\n"), x + 9, y + 28, { width: colWidth - 18 });
-  doc.fontSize(11).text(rightTitle, x + colWidth + 9, y + 10, { width: colWidth - 18 });
-  doc.fontSize(9).text(rightRows.map(([label, value]) => `${label}: ${value}`).join("\n"), x + colWidth + 9, y + 28, { width: colWidth - 18 });
-  doc.y = y + height + 10;
+  doc.fontSize(titleSize).fillColor(PDFKIT_COLORS.text).text(leftTitle, x + 9, y + titleTop, { width: colWidth - 18 });
+  doc.fontSize(bodySize).text(leftRows.map(([label, value]) => `${label}: ${value}`).join("\n"), x + 9, y + bodyTop, { width: colWidth - 18 });
+  doc.fontSize(titleSize).text(rightTitle, x + colWidth + 9, y + titleTop, { width: colWidth - 18 });
+  doc.fontSize(bodySize).text(rightRows.map(([label, value]) => `${label}: ${value}`).join("\n"), x + colWidth + 9, y + bodyTop, { width: colWidth - 18 });
+  doc.y = y + height + (compact ? 8 : 10);
 }
 
 function drawKeyValueGrid(doc, rows, currency) {
@@ -587,7 +593,8 @@ function drawKeyValueGrid(doc, rows, currency) {
   const width = doc.page.width - PDF_MARGIN * 2;
   const colCount = 4;
   const colWidth = width / colCount;
-  const rowHeight = 44;
+  const compact = Boolean(doc._pdfCompact);
+  const rowHeight = compact ? 36 : 44;
   for (let i = 0; i < rows.length; i += colCount) {
     ensurePdfPageSpace(doc, rowHeight);
     const y = doc.y;
@@ -595,12 +602,12 @@ function drawKeyValueGrid(doc, rows, currency) {
     slice.forEach(([label, value], index) => {
       const cellX = x + index * colWidth;
       doc.rect(cellX, y, colWidth, rowHeight).stroke(PDFKIT_COLORS.border);
-      doc.fontSize(7.5).fillColor(PDFKIT_COLORS.muted).text(label, cellX + 6, y + 7, { width: colWidth - 12 });
-      doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(typeof value === "number" ? pdfMoney(value, currency) : String(value ?? ""), cellX + 6, y + 23, { width: colWidth - 12 });
+      doc.fontSize(compact ? 7 : 7.5).fillColor(PDFKIT_COLORS.muted).text(label, cellX + 6, y + 6, { width: colWidth - 12 });
+      doc.fontSize(compact ? 8.5 : 9).fillColor(PDFKIT_COLORS.text).text(typeof value === "number" ? pdfMoney(value, currency) : String(value ?? ""), cellX + 6, y + (compact ? 21 : 23), { width: colWidth - 12 });
     });
     doc.y = y + rowHeight;
   }
-  doc.moveDown(0.8);
+  doc.moveDown(compact ? 0.55 : 0.8);
 }
 
 function drawSummary(doc, items = []) {
@@ -609,16 +616,17 @@ function drawSummary(doc, items = []) {
   const y = doc.y;
   const width = doc.page.width - PDF_MARGIN * 2;
   const colWidth = width / items.length;
-  const rowHeight = 32;
+  const compact = Boolean(doc._pdfCompact);
+  const rowHeight = compact ? 28 : 32;
   ensurePdfPageSpace(doc, rowHeight * 2 + 10);
   items.forEach((item, index) => {
     const cellX = x + index * colWidth;
     doc.rect(cellX, y, colWidth, rowHeight).fillAndStroke(PDFKIT_COLORS.dark, PDFKIT_COLORS.border);
-    doc.fillColor("#FFFFFF").fontSize(8).text(item.label || "", cellX + 5, y + 11, { width: colWidth - 10, align: "center" });
+    doc.fillColor("#FFFFFF").fontSize(compact ? 7.2 : 8).text(item.label || "", cellX + 5, y + (compact ? 9 : 11), { width: colWidth - 10, align: "center" });
     doc.rect(cellX, y + rowHeight, colWidth, rowHeight).fillAndStroke(PDFKIT_COLORS.summary, PDFKIT_COLORS.border);
-    doc.fillColor(PDFKIT_COLORS.text).fontSize(9).text(item.value || "", cellX + 5, y + rowHeight + 10, { width: colWidth - 10, align: "center" });
+    doc.fillColor(PDFKIT_COLORS.text).fontSize(compact ? 8.5 : 9).text(item.value || "", cellX + 5, y + rowHeight + (compact ? 9 : 10), { width: colWidth - 10, align: "center" });
   });
-  doc.y = y + rowHeight * 2 + 14;
+  doc.y = y + rowHeight * 2 + (compact ? 10 : 14);
 }
 
 function drawPdfTable(doc, section, currency) {
@@ -627,14 +635,15 @@ function drawPdfTable(doc, section, currency) {
   const tableWidth = widths.reduce((total, width) => total + width, 0);
   const scale = Math.min(1, (doc.page.width - PDF_MARGIN * 2) / tableWidth);
   const scaled = widths.map((width) => width * scale);
-  const headerHeight = 30;
+  const compact = Boolean(doc._pdfCompact);
+  const headerHeight = compact ? 28 : 30;
   const tableDrawWidth = scaled.reduce((a, b) => a + b, 0);
   const drawHeader = () => {
     const headerY = doc.y;
     doc.rect(x, headerY, tableDrawWidth, headerHeight).fill(PDFKIT_COLORS.red);
     let headerX = x;
     section.columns.forEach((label, index) => {
-      doc.fillColor("#FFFFFF").fontSize(6.8).text(label, headerX + 4, headerY + 7, { width: scaled[index] - 8, align: "center" });
+      doc.fillColor("#FFFFFF").fontSize(compact ? 6.5 : 6.8).text(label, headerX + 4, headerY + (compact ? 6 : 7), { width: scaled[index] - 8, align: "center" });
       headerX += scaled[index];
     });
     doc.y = headerY + headerHeight;
@@ -645,7 +654,7 @@ function drawPdfTable(doc, section, currency) {
     const values = row._keys.map((key, index) => ({ key, value: row[key], money: section.moneyCols?.includes(index) }));
     const textHeight = Math.max(...values.map(({ value, money }, index) => doc.heightOfString(pdfCellText(value, section.currencySymbol || currency, money), { width: scaled[index] - 8 })), 20);
     const hasImage = values.some(({ value }) => value?.type === "image" && value.source);
-    const rowHeight = Math.max(row._summary ? 28 : 24, hasImage ? 42 : textHeight + 12);
+    const rowHeight = Math.max(row._summary ? 26 : compact ? 22 : 24, hasImage ? 40 : textHeight + (compact ? 10 : 12));
     const pageCountBefore = doc.bufferedPageRange().count;
     ensurePdfPageSpace(doc, rowHeight + 8);
     if (doc.bufferedPageRange().count > pageCountBefore) drawHeader();
@@ -668,7 +677,7 @@ function drawPdfTable(doc, section, currency) {
         }
       } else {
         const align = money || key === "quantity" || key === "no" ? "center" : "left";
-        doc.fillColor(PDFKIT_COLORS.text).fontSize(7.5).text(pdfCellText(value, section.currencySymbol || currency, money), currentX + 4, y + 7, { width: cellWidth - 8, align });
+        doc.fillColor(PDFKIT_COLORS.text).fontSize(compact ? 7.2 : 7.5).text(pdfCellText(value, section.currencySymbol || currency, money), currentX + 4, y + (compact ? 6 : 7), { width: cellWidth - 8, align });
       }
       currentX += cellWidth;
     });
@@ -688,19 +697,22 @@ async function renderStructuredPdfWithJs(document, options = {}) {
     });
     doc.registerFont("main", existsSync(PDF_FONT_PATH) ? PDF_FONT_PATH : "Helvetica");
     doc.font("main");
+    doc._pdfCompact = Boolean(document.compact);
     const titleX = document.layout === "landscape" ? 360 : 270;
     const titleWidth = doc.page.width - titleX - PDF_MARGIN;
-    if (options.logoPath && existsSync(options.logoPath)) doc.image(options.logoPath, 42, 40, { fit: [155, 70] });
-    doc.fillColor(PDFKIT_COLORS.text).fontSize(24).text(document.title || "ORDER DOCUMENT", titleX, 54, { width: titleWidth, align: "center" });
-    doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(document.subtitle || "", titleX, 98, { width: titleWidth, align: "left" });
-    doc.y = 145;
+    const compact = Boolean(document.compact);
+    if (options.logoPath && existsSync(options.logoPath)) doc.image(options.logoPath, 42, compact ? 34 : 40, { fit: compact ? [135, 58] : [155, 70] });
+    doc.fillColor(PDFKIT_COLORS.text).fontSize(compact ? 22 : 24).text(document.title || "ORDER DOCUMENT", titleX, compact ? 46 : 54, { width: titleWidth, align: "center" });
+    doc.fontSize(compact ? 8.5 : 9).fillColor(PDFKIT_COLORS.text).text(document.subtitle || "", titleX, compact ? 86 : 98, { width: titleWidth, align: "left" });
+    doc.x = PDF_MARGIN;
+    doc.y = compact ? 128 : 145;
     if (document.info) drawBoxedColumns(doc, document.info.leftTitle, document.info.leftRows || [], document.info.rightTitle, document.info.rightRows || []);
     drawKeyValueGrid(doc, document.terms || [], document.currencySymbol || "$");
     drawSummary(doc, document.summary || []);
     for (const section of document.sections || []) {
       ensurePdfPageSpace(doc, section.kind === "kv" ? 104 : 52);
-      doc.fontSize(13).fillColor(PDFKIT_COLORS.text).text(section.title || "", PDF_MARGIN, doc.y, { width: doc.page.width - PDF_MARGIN * 2 });
-      doc.moveDown(0.4);
+      doc.fontSize(compact ? 12 : 13).fillColor(PDFKIT_COLORS.text).text(section.title || "", PDF_MARGIN, doc.y, { width: doc.page.width - PDF_MARGIN * 2 });
+      doc.moveDown(compact ? 0.25 : 0.4);
       if (section.kind === "table") drawPdfTable(doc, section, document.currencySymbol || "$");
       if (section.kind === "kv") drawKeyValueGrid(doc, section.rows || [], section.currencySymbol || document.currencySymbol || "$");
       if (!section.kind || section.kind === "lines") {
@@ -709,8 +721,9 @@ async function renderStructuredPdfWithJs(document, options = {}) {
     }
     if (document.notes?.length) {
       ensurePdfPageSpace(doc, 48);
-      doc.fontSize(13).fillColor(PDFKIT_COLORS.text).text("Notes / 备注");
-      doc.fontSize(8).fillColor(PDFKIT_COLORS.muted).text(document.notes.join("\n"));
+      doc.x = PDF_MARGIN;
+      doc.fontSize(13).fillColor(PDFKIT_COLORS.text).text("Notes / 备注", PDF_MARGIN, doc.y, { width: doc.page.width - PDF_MARGIN * 2 });
+      doc.fontSize(8).fillColor(PDFKIT_COLORS.muted).text(document.notes.join("\n"), PDF_MARGIN, doc.y, { width: doc.page.width - PDF_MARGIN * 2 });
     }
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i += 1) {
@@ -1293,6 +1306,7 @@ function pdfDocumentPayload(db, type, idValue, user) {
       title: "PURCHASE ORDER",
       subtitle: `PO Reference: ${po.poNo}\nPO Date: ${po.orderDate}\nRelated Sales Order: ${relatedSalesOrder?.orderNo || "Direct PO"}`,
       layout: "landscape",
+      compact: true,
       currencySymbol: "¥",
       info: {
         leftTitle: "Supplier / 采购商",
@@ -1338,15 +1352,7 @@ function pdfDocumentPayload(db, type, idValue, user) {
           columns: ["#", "Logo", "Product / 产品", "SKU", "Logo Requirement / 标志要求"],
           widths: [9, 25, 58, 24, 52],
           rows: purchaseLogoRows(db, po)
-        }] : []),
-        {
-          title: "Amount Summary / 金额汇总",
-          kind: "kv",
-          rows: [
-            ["Purchase Amount / 采购金额", total],
-            ["QC Status / 质检状态", statusText(po.qcStatus)]
-          ]
-        }
+        }] : [])
       ],
       notes: [po.remark || "Factory must confirm delivery date, product details, logo/artwork and packing before mass production."]
     };
