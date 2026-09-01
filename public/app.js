@@ -624,7 +624,7 @@ async function renderNewPurchaseOrder() {
         <h2 style="margin:0">采购产品明细</h2>
         <button class="btn" type="button" id="addPoItem">添加一行</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>产品名称（中文 / English）</th><th>数量</th><th>工厂采购单价（人民币）</th><th>规格</th><th>标志要求</th><th>颜色</th><th>包装</th><th>操作</th></tr></thead><tbody id="poItemsBody">
+      <div class="table-wrap"><table><thead><tr><th>产品名称（中文 / English）</th><th>产品 Logo</th><th>数量</th><th>工厂采购单价（人民币）</th><th>规格</th><th>标志要求</th><th>颜色</th><th>包装</th><th>操作</th></tr></thead><tbody id="poItemsBody">
         ${poItemRowTemplate(products.items)}
       </tbody></table></div>
       <div style="height:14px"></div>
@@ -657,11 +657,12 @@ async function renderNewPurchaseOrder() {
     const fd = new FormData(event.currentTarget);
     const body = Object.fromEntries(fd);
     if (!body.salesOrderId) delete body.salesOrderId;
-    body.items = $$("#poItemsBody tr").map((row) => {
+    body.items = await Promise.all($$("#poItemsBody tr").map(async (row) => {
       const productSelect = $(".po-product", row);
       const opt = productSelect.selectedOptions[0];
       const quantity = Number($(".po-quantity", row).value || 0);
       const purchaseUnitPrice = Number($(".po-purchase-price", row).value || 0);
+      const logoFile = $(".po-logo-file", row)?.files?.[0];
       return {
         productId: productSelect.value,
         productName: opt.dataset.name,
@@ -671,10 +672,13 @@ async function renderNewPurchaseOrder() {
         purchaseUnitPrice,
         purchaseTotal: quantity * purchaseUnitPrice,
         logoRequirement: $(".po-logo", row).value,
+        logoImageData: logoFile ? await fileToDataUrl(logoFile, { maxRawBytes: 2_000_000 }) : "",
+        logoImageName: logoFile?.name || "",
         colorRequirement: $(".po-color", row).value,
         packagingRequirement: $(".po-packaging", row).value
       };
-    }).filter((item) => item.productId && item.quantity > 0);
+    }));
+    body.items = body.items.filter((item) => item.productId && item.quantity > 0);
     if (!body.items.length) return alert("请至少填写一条有效的采购产品明细");
     try {
       const po = await api("/api/purchase-orders", { method: "POST", body: JSON.stringify(body) });
@@ -699,6 +703,7 @@ async function renderNewPurchaseOrder() {
 function poItemRowTemplate(products) {
   return `<tr>
     <td><select class="select po-product">${products.map((p) => `<option value="${p.id}" data-name="${p.name}" data-model="${p.model}" data-purchase="${p.defaultPurchasePrice}">${p.name} / ${p.model}</option>`).join("")}</select></td>
+    <td><input class="input po-logo-file" type="file" accept="image/*"></td>
     <td><input class="input po-quantity" type="number" min="1" value="500"></td>
     <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
     <td><input class="input po-specification" value="按确认样生产"></td>
@@ -827,11 +832,15 @@ function purchaseOrderView(po, factoryMode) {
 function purchaseItemsEditTable(items = [], factoryMode = false) {
   if (!items.length) return `<p class="muted">暂无数据</p>`;
   return `<div class="table-wrap"><table>
-    <thead><tr><th>产品名称（中文 / English）</th><th>型号</th><th>数量</th><th>工厂采购单价（CNY）</th><th>工厂采购总价（CNY）</th><th>标志要求</th><th>包装</th></tr></thead>
+    <thead><tr><th>产品名称（中文 / English）</th><th>型号</th><th>产品 Logo</th><th>数量</th><th>工厂采购单价（CNY）</th><th>工厂采购总价（CNY）</th><th>标志要求</th><th>包装</th></tr></thead>
     <tbody>
       ${items.map((item) => `<tr data-po-item-id="${item.id}" data-po-qty="${Number(item.quantity || 0)}">
         <td>${displayValue(item.productName)}</td>
         <td>${displayValue(item.model)}</td>
+        <td>
+          ${item.logoImageData ? `<img class="product-logo-thumb" src="${item.logoImageData}" alt="产品 Logo">` : `<span class="muted">未上传</span>`}
+          ${factoryMode ? "" : `<input class="input po-edit-logo-file" type="file" accept="image/*">`}
+        </td>
         <td>${factoryMode ? `<strong>${Number(item.quantity || 0)}</strong>` : `<input class="input po-edit-qty" type="number" min="0" step="1" value="${Number(item.quantity || 0)}">`}</td>
         <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
         <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
@@ -854,10 +863,18 @@ function bindPoActions(po, factoryMode) {
   };
   $$(".po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
   $("#savePoStatus").addEventListener("click", async () => {
-    const items = $$("[data-po-item-id]").map((row) => ({
-      id: row.dataset.poItemId,
-      quantity: readPoQuantity(row),
-      purchaseUnitPrice: Number($(".po-edit-price", row)?.value || 0)
+    const items = await Promise.all($$("[data-po-item-id]").map(async (row) => {
+      const logoFile = $(".po-edit-logo-file", row)?.files?.[0];
+      const item = {
+        id: row.dataset.poItemId,
+        quantity: readPoQuantity(row),
+        purchaseUnitPrice: Number($(".po-edit-price", row)?.value || 0)
+      };
+      if (logoFile) {
+        item.logoImageData = await fileToDataUrl(logoFile, { maxRawBytes: 2_000_000 });
+        item.logoImageName = logoFile.name;
+      }
+      return item;
     }));
     await api(`/api/purchase-orders/${po.id}`, {
       method: "PATCH",
@@ -947,6 +964,20 @@ function toBase64(file) {
   });
 }
 
+async function fileToDataUrl(file, options = {}) {
+  const maxRawBytes = options.maxRawBytes || 2_000_000;
+  if (!file.type.startsWith("image/")) throw new Error("产品 Logo 只支持 JPG、PNG、WebP 等图片格式");
+  if (file.size > maxRawBytes) {
+    return compressImageToDataUrl(file, 900, 0.78);
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("图片读取失败，请重新选择文件"));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function fileToUploadBase64(file, options = {}) {
   const maxRawBytes = options.maxRawBytes || 4_000_000;
   if (options.compressImages && file.type.startsWith("image/")) {
@@ -956,6 +987,28 @@ async function fileToUploadBase64(file, options = {}) {
     throw new Error(`文件过大，请压缩到 ${Math.round(maxRawBytes / 1024 / 1024)}MB 以内后再上传。`);
   }
   return toBase64(file);
+}
+
+function compressImageToDataUrl(file, maxSide = 900, quality = 0.78) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("图片读取失败，请重新选择文件"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("图片格式暂不支持，请改用 JPG/PNG 或压缩后再上传"));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function compressImageToBase64(file, maxSide = 1600, quality = 0.74) {

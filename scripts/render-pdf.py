@@ -1,10 +1,11 @@
 import io
 import json
 import sys
+import base64
 from pathlib import Path
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -41,11 +42,15 @@ def register_font():
 
 
 FONT_NAME = register_font()
-PAGE_WIDTH, PAGE_HEIGHT = A4
+PAGE_WIDTH, PAGE_HEIGHT = letter
 PRIMARY = colors.HexColor("#111827")
 BORDER = colors.HexColor("#D1D5DB")
 HEADER_BG = colors.HexColor("#F3F4F6")
 ACCENT = colors.HexColor("#DC2626")
+TABLE_RED = colors.HexColor("#C9181E")
+DARK = colors.HexColor("#111827")
+SOFT_RED = colors.HexColor("#FDE2E2")
+SUMMARY_BG = colors.HexColor("#FEF2F2")
 MUTED = colors.HexColor("#6B7280")
 
 
@@ -65,12 +70,14 @@ def money(value, currency="$"):
 def styles():
     base = getSampleStyleSheet()
     return {
-        "title": ParagraphStyle("Title", parent=base["Title"], fontName=FONT_NAME, fontSize=18, leading=22, textColor=PRIMARY, alignment=0, spaceAfter=8),
-        "sub": ParagraphStyle("Sub", parent=base["Normal"], fontName=FONT_NAME, fontSize=8.5, leading=11, textColor=MUTED),
-        "h2": ParagraphStyle("H2", parent=base["Heading2"], fontName=FONT_NAME, fontSize=10.5, leading=13, textColor=PRIMARY, spaceBefore=8, spaceAfter=5),
-        "body": ParagraphStyle("Body", parent=base["Normal"], fontName=FONT_NAME, fontSize=8.2, leading=10.5, textColor=PRIMARY),
-        "small": ParagraphStyle("Small", parent=base["Normal"], fontName=FONT_NAME, fontSize=7.2, leading=9.2, textColor=PRIMARY),
-        "small_muted": ParagraphStyle("SmallMuted", parent=base["Normal"], fontName=FONT_NAME, fontSize=7.2, leading=9.2, textColor=MUTED),
+        "title": ParagraphStyle("Title", parent=base["Title"], fontName=FONT_NAME, fontSize=21, leading=25, textColor=PRIMARY, alignment=1, spaceAfter=10),
+        "sub": ParagraphStyle("Sub", parent=base["Normal"], fontName=FONT_NAME, fontSize=8.8, leading=12, textColor=PRIMARY),
+        "h2": ParagraphStyle("H2", parent=base["Heading2"], fontName=FONT_NAME, fontSize=12, leading=15, textColor=PRIMARY, spaceBefore=6, spaceAfter=6),
+        "body": ParagraphStyle("Body", parent=base["Normal"], fontName=FONT_NAME, fontSize=8.3, leading=10.8, textColor=PRIMARY),
+        "small": ParagraphStyle("Small", parent=base["Normal"], fontName=FONT_NAME, fontSize=7.5, leading=9.6, textColor=PRIMARY),
+        "small_white": ParagraphStyle("SmallWhite", parent=base["Normal"], fontName=FONT_NAME, fontSize=7.5, leading=9.6, textColor=colors.white, alignment=1),
+        "small_center": ParagraphStyle("SmallCenter", parent=base["Normal"], fontName=FONT_NAME, fontSize=7.5, leading=9.6, textColor=PRIMARY, alignment=1),
+        "small_muted": ParagraphStyle("SmallMuted", parent=base["Normal"], fontName=FONT_NAME, fontSize=7.3, leading=9.3, textColor=MUTED),
     }
 
 
@@ -90,12 +97,40 @@ def table_style(header=True, align_right_cols=None):
     ]
     if header:
         commands.extend([
-            ("BACKGROUND", (0, 0), (-1, 0), HEADER_BG),
-            ("TEXTCOLOR", (0, 0), (-1, 0), PRIMARY),
+            ("BACKGROUND", (0, 0), (-1, 0), TABLE_RED),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ])
     for col in align_right_cols:
         commands.append(("ALIGN", (col, 1), (col, -1), "RIGHT"))
     return TableStyle(commands)
+
+
+def image_from_value(value, width=19 * mm, height=13 * mm):
+    if not value:
+        return p("-", S["small_center"])
+    try:
+        if isinstance(value, dict):
+            source = value.get("source") or value.get("path") or ""
+        else:
+            source = str(value)
+        if source.startswith("data:image/"):
+            encoded = source.split(",", 1)[1]
+            image_source = io.BytesIO(base64.b64decode(encoded))
+        elif source and Path(source).exists():
+            image_source = source
+        else:
+            return p("-", S["small_center"])
+        img = Image(image_source, width=width, height=height)
+        img.hAlign = "CENTER"
+        return img
+    except Exception:
+        return p("-", S["small_center"])
+
+
+def cell_value(value, style):
+    if isinstance(value, dict) and value.get("type") == "image":
+        return image_from_value(value)
+    return p(value, style)
 
 
 def info_table(left_title, left_rows, right_title, right_rows):
@@ -136,15 +171,38 @@ def key_value_table(rows, cols=4, currency="$"):
 
 def product_table(columns, rows, widths, money_cols=None, currency="$"):
     money_cols = money_cols or []
-    data = [[p(label, S["small"]) for label in columns]]
+    data = [[p(label, S["small_white"]) for label in columns]]
+    row_styles = []
     for row in rows:
         rendered = []
         for index, key in enumerate(row["_keys"]):
             value = row.get(key, "")
-            rendered.append(p(money(value, currency) if index in money_cols else value, S["small"]))
+            style = S["small_center"] if key in ("no", "quantity", "logoImage") else S["small"]
+            rendered.append(cell_value(money(value, currency) if index in money_cols else value, style))
         data.append(rendered)
+        if row.get("_summary"):
+            row_styles.append(("BACKGROUND", (0, len(data) - 1), (-1, len(data) - 1), SOFT_RED))
     table = Table(data, colWidths=widths, repeatRows=1)
-    table.setStyle(table_style(header=True, align_right_cols=money_cols))
+    style = table_style(header=True, align_right_cols=money_cols)
+    for command in row_styles:
+        style.add(*command)
+    table.setStyle(style)
+    return table
+
+
+def summary_table(items):
+    labels = [p(item.get("label", ""), S["small_white"]) for item in items]
+    values = [p(item.get("value", ""), S["small_center"]) for item in items]
+    table = Table([labels, values], colWidths=[168 * mm / max(len(items), 1)] * len(items))
+    table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+        ("BACKGROUND", (0, 0), (-1, 0), DARK),
+        ("BACKGROUND", (0, 1), (-1, 1), SUMMARY_BG),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
     return table
 
 
@@ -161,12 +219,12 @@ def logo_flowable(path):
 
 def header(title, subtitle, logo_path):
     logo = logo_flowable(logo_path)
-    left = [p(title, S["title"]), p(subtitle, S["sub"])]
-    table = Table([[left, logo]], colWidths=[120 * mm, 48 * mm])
+    right = [p(title, S["title"])]
+    right.extend(p(line, S["sub"]) for line in str(subtitle or "").split("\n") if line)
+    table = Table([[logo, right]], colWidths=[70 * mm, 98 * mm])
     table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.7, ACCENT),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     return table
 
@@ -185,11 +243,18 @@ def build_structured_document(doc_payload, logo_path):
         flow.append(key_value_table(terms, currency=currency))
         flow.append(Spacer(1, 8))
 
+    summary = doc_payload.get("summary", [])
+    if summary:
+        flow.append(summary_table(summary))
+        flow.append(Spacer(1, 8))
+
     for section in doc_payload.get("sections", []):
         flow.append(p(section.get("title", ""), S["h2"]))
         kind = section.get("kind")
         if kind == "table":
             flow.append(product_table(section["columns"], section["rows"], [w * mm for w in section["widths"]], section.get("moneyCols", []), section.get("currencySymbol", currency)))
+        elif kind == "summary":
+            flow.append(summary_table(section.get("items", [])))
         elif kind == "kv":
             flow.append(key_value_table(section.get("rows", []), section.get("cols", 4), section.get("currencySymbol", currency)))
         else:
@@ -225,7 +290,7 @@ def main():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=A4,
+        pagesize=letter,
         leftMargin=18 * mm,
         rightMargin=18 * mm,
         topMargin=16 * mm,

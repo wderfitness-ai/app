@@ -1,12 +1,13 @@
 import http from "node:http";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { get as blobGet, issueSignedToken, presignUrl, put as blobPut } from "@vercel/blob";
+import PDFDocument from "pdfkit";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -17,6 +18,7 @@ const FACTORY_LICENSE_DIR = path.join(UPLOAD_DIR, "factory_licenses");
 const PDF_SCRIPT = path.join(__dirname, "scripts", "render-pdf.py");
 const PDF_EXTRACT_SCRIPT = path.join(__dirname, "scripts", "extract-order-pdf.py");
 const LOGO_PATH = path.join(PUBLIC_DIR, "assets", "wder-logo.jpg");
+const PDF_FONT_PATH = path.join(PUBLIC_DIR, "assets", "fonts", "NotoSansSC-Regular.ttf");
 const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 const PORT = Number(process.env.PORT || 3000);
 const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
@@ -510,6 +512,214 @@ function downloadFileName(...parts) {
     .replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+const PDFKIT_COLORS = {
+  text: "#111827",
+  muted: "#6B7280",
+  border: "#D1D5DB",
+  red: "#C9181E",
+  dark: "#111827",
+  softRed: "#FDE2E2",
+  summary: "#FEF2F2"
+};
+
+const PDF_MARGIN = 42;
+const pt = (mmValue) => mmValue * 2.8346456693;
+
+function pdfMoney(value, currency = "$") {
+  const numeric = Number(value || 0);
+  return `${currency}${numeric.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function pdfImageBuffer(source) {
+  if (!source || typeof source !== "string") return null;
+  if (source.startsWith("data:image/")) {
+    const encoded = source.split(",", 2)[1];
+    return encoded ? Buffer.from(encoded, "base64") : null;
+  }
+  if (source.startsWith("/") && existsSync(source)) return readFileSync(source);
+  return null;
+}
+
+function pdfCellText(value, currency, isMoney) {
+  if (value && typeof value === "object") return "";
+  return isMoney ? pdfMoney(value, currency) : String(value ?? "");
+}
+
+function drawPdfFooter(doc) {
+  const y = doc.page.height - PDF_MARGIN - 20;
+  doc.fontSize(8).fillColor(PDFKIT_COLORS.muted);
+  doc.text("Wder Fitness Equipment Manufacturer", PDF_MARGIN, y, { lineBreak: false });
+  doc.text(`Page ${doc.bufferedPageRange().count}`, doc.page.width - PDF_MARGIN - 70, y, { width: 70, align: "right", lineBreak: false });
+}
+
+function ensurePdfPageSpace(doc, height) {
+  if (!doc.page) doc.addPage();
+  if (doc.y + height <= doc.page.height - PDF_MARGIN - 24) return;
+  doc.addPage();
+}
+
+function drawBoxedColumns(doc, leftTitle, leftRows, rightTitle, rightRows) {
+  const x = PDF_MARGIN;
+  const y = doc.y;
+  const width = doc.page.width - PDF_MARGIN * 2;
+  const colWidth = width / 2;
+  const leftText = [leftTitle, ...leftRows.map(([label, value]) => `${label}: ${value}`)].join("\n");
+  const rightText = [rightTitle, ...rightRows.map(([label, value]) => `${label}: ${value}`)].join("\n");
+  const height = Math.max(
+    doc.heightOfString(leftText, { width: colWidth - 18 }) + 16,
+    doc.heightOfString(rightText, { width: colWidth - 18 }) + 16,
+    84
+  );
+  ensurePdfPageSpace(doc, height);
+  doc.rect(x, y, width, height).stroke(PDFKIT_COLORS.border);
+  doc.moveTo(x + colWidth, y).lineTo(x + colWidth, y + height).stroke(PDFKIT_COLORS.border);
+  doc.fontSize(11).fillColor(PDFKIT_COLORS.text).text(leftTitle, x + 9, y + 10, { width: colWidth - 18 });
+  doc.fontSize(9).text(leftRows.map(([label, value]) => `${label}: ${value}`).join("\n"), x + 9, y + 28, { width: colWidth - 18 });
+  doc.fontSize(11).text(rightTitle, x + colWidth + 9, y + 10, { width: colWidth - 18 });
+  doc.fontSize(9).text(rightRows.map(([label, value]) => `${label}: ${value}`).join("\n"), x + colWidth + 9, y + 28, { width: colWidth - 18 });
+  doc.y = y + height + 10;
+}
+
+function drawKeyValueGrid(doc, rows, currency) {
+  if (!rows?.length) return;
+  const x = PDF_MARGIN;
+  const width = doc.page.width - PDF_MARGIN * 2;
+  const colCount = 4;
+  const colWidth = width / colCount;
+  const rowHeight = 44;
+  for (let i = 0; i < rows.length; i += colCount) {
+    ensurePdfPageSpace(doc, rowHeight);
+    const y = doc.y;
+    const slice = rows.slice(i, i + colCount);
+    slice.forEach(([label, value], index) => {
+      const cellX = x + index * colWidth;
+      doc.rect(cellX, y, colWidth, rowHeight).stroke(PDFKIT_COLORS.border);
+      doc.fontSize(7.5).fillColor(PDFKIT_COLORS.muted).text(label, cellX + 6, y + 7, { width: colWidth - 12 });
+      doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(typeof value === "number" ? pdfMoney(value, currency) : String(value ?? ""), cellX + 6, y + 23, { width: colWidth - 12 });
+    });
+    doc.y = y + rowHeight;
+  }
+  doc.moveDown(0.8);
+}
+
+function drawSummary(doc, items = []) {
+  if (!items.length) return;
+  const x = PDF_MARGIN;
+  const y = doc.y;
+  const width = doc.page.width - PDF_MARGIN * 2;
+  const colWidth = width / items.length;
+  const rowHeight = 32;
+  ensurePdfPageSpace(doc, rowHeight * 2 + 10);
+  items.forEach((item, index) => {
+    const cellX = x + index * colWidth;
+    doc.rect(cellX, y, colWidth, rowHeight).fillAndStroke(PDFKIT_COLORS.dark, PDFKIT_COLORS.border);
+    doc.fillColor("#FFFFFF").fontSize(8).text(item.label || "", cellX + 5, y + 11, { width: colWidth - 10, align: "center" });
+    doc.rect(cellX, y + rowHeight, colWidth, rowHeight).fillAndStroke(PDFKIT_COLORS.summary, PDFKIT_COLORS.border);
+    doc.fillColor(PDFKIT_COLORS.text).fontSize(9).text(item.value || "", cellX + 5, y + rowHeight + 10, { width: colWidth - 10, align: "center" });
+  });
+  doc.y = y + rowHeight * 2 + 14;
+}
+
+function drawPdfTable(doc, section, currency) {
+  const x = PDF_MARGIN;
+  const widths = section.widths.map(pt);
+  const tableWidth = widths.reduce((total, width) => total + width, 0);
+  const scale = Math.min(1, (doc.page.width - PDF_MARGIN * 2) / tableWidth);
+  const scaled = widths.map((width) => width * scale);
+  const headerHeight = 24;
+  ensurePdfPageSpace(doc, headerHeight + 24);
+  let y = doc.y;
+  doc.rect(x, y, scaled.reduce((a, b) => a + b, 0), headerHeight).fill(PDFKIT_COLORS.red);
+  let currentX = x;
+  section.columns.forEach((label, index) => {
+    doc.fillColor("#FFFFFF").fontSize(7.2).text(label, currentX + 4, y + 8, { width: scaled[index] - 8, align: "center" });
+    currentX += scaled[index];
+  });
+  y += headerHeight;
+  doc.y = y;
+  for (const row of section.rows || []) {
+    const values = row._keys.map((key, index) => ({ key, value: row[key], money: section.moneyCols?.includes(index) }));
+    const textHeight = Math.max(...values.map(({ value, money }) => doc.heightOfString(pdfCellText(value, section.currencySymbol || currency, money), { width: scaled[values.indexOf(values.find((v) => v.value === value))] || 40 })), 20);
+    const hasImage = values.some(({ value }) => value?.type === "image" && value.source);
+    const rowHeight = Math.max(row._summary ? 28 : 24, hasImage ? 42 : textHeight + 12);
+    ensurePdfPageSpace(doc, rowHeight + 8);
+    y = doc.y;
+    currentX = x;
+    if (row._summary) doc.rect(x, y, scaled.reduce((a, b) => a + b, 0), rowHeight).fill(PDFKIT_COLORS.softRed);
+    values.forEach(({ key, value, money }, index) => {
+      const cellWidth = scaled[index];
+      doc.rect(currentX, y, cellWidth, rowHeight).stroke(PDFKIT_COLORS.border);
+      if (value?.type === "image") {
+        const image = pdfImageBuffer(value.source);
+        if (image) {
+          try {
+            doc.image(image, currentX + 5, y + 6, { fit: [cellWidth - 10, rowHeight - 12], align: "center", valign: "center" });
+          } catch {
+            doc.fillColor(PDFKIT_COLORS.muted).fontSize(8).text("-", currentX, y + 14, { width: cellWidth, align: "center" });
+          }
+        } else {
+          doc.fillColor(PDFKIT_COLORS.muted).fontSize(8).text("-", currentX, y + 14, { width: cellWidth, align: "center" });
+        }
+      } else {
+        const align = money || key === "quantity" || key === "no" ? "center" : "left";
+        doc.fillColor(PDFKIT_COLORS.text).fontSize(7.5).text(pdfCellText(value, section.currencySymbol || currency, money), currentX + 4, y + 7, { width: cellWidth - 8, align });
+      }
+      currentX += cellWidth;
+    });
+    doc.y = y + rowHeight;
+  }
+  doc.moveDown(1);
+}
+
+async function renderStructuredPdfWithJs(document, options = {}) {
+  try {
+    const doc = new PDFDocument({ size: "LETTER", margin: PDF_MARGIN, bufferPages: true, autoFirstPage: true });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    const done = new Promise((resolve, reject) => {
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+    });
+    doc.registerFont("main", existsSync(PDF_FONT_PATH) ? PDF_FONT_PATH : "Helvetica");
+    doc.font("main");
+    if (options.logoPath && existsSync(options.logoPath)) doc.image(options.logoPath, 42, 40, { fit: [155, 70] });
+    doc.fillColor(PDFKIT_COLORS.text).fontSize(24).text(document.title || "ORDER DOCUMENT", 270, 54, { width: 285, align: "center" });
+    doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(document.subtitle || "", 270, 98, { width: 285, align: "left" });
+    doc.y = 145;
+    if (document.info) drawBoxedColumns(doc, document.info.leftTitle, document.info.leftRows || [], document.info.rightTitle, document.info.rightRows || []);
+    drawKeyValueGrid(doc, document.terms || [], document.currencySymbol || "$");
+    drawSummary(doc, document.summary || []);
+    for (const section of document.sections || []) {
+      ensurePdfPageSpace(doc, section.kind === "kv" ? 104 : 52);
+      doc.fontSize(13).fillColor(PDFKIT_COLORS.text).text(section.title || "", PDF_MARGIN, doc.y, { width: doc.page.width - PDF_MARGIN * 2 });
+      doc.moveDown(0.4);
+      if (section.kind === "table") drawPdfTable(doc, section, document.currencySymbol || "$");
+      if (section.kind === "kv") drawKeyValueGrid(doc, section.rows || [], section.currencySymbol || document.currencySymbol || "$");
+      if (!section.kind || section.kind === "lines") {
+        for (const line of section.lines || []) doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(line);
+      }
+    }
+    if (document.notes?.length) {
+      ensurePdfPageSpace(doc, 48);
+      doc.fontSize(13).fillColor(PDFKIT_COLORS.text).text("Notes / 备注");
+      doc.fontSize(8).fillColor(PDFKIT_COLORS.muted).text(document.notes.join("\n"));
+    }
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i += 1) {
+      doc.switchToPage(i);
+      doc.font("main").fontSize(8).fillColor(PDFKIT_COLORS.muted);
+      const footerY = doc.page.height - PDF_MARGIN - 20;
+      doc.text("Wder Fitness Equipment Manufacturer", PDF_MARGIN, footerY, { lineBreak: false });
+      doc.text(`Page ${i + 1}`, doc.page.width - PDF_MARGIN - 70, footerY, { width: 70, align: "right", lineBreak: false });
+    }
+    doc.end();
+    return await done;
+  } catch (error) {
+    console.error("PDFKit renderer failed:", error.stack || error.message);
+    return null;
+  }
+}
+
 function minimalPdf(title, lines, options = {}) {
   const rendered = renderPdfWithPython(title, lines, options);
   if (rendered) return rendered;
@@ -553,8 +763,8 @@ function renderPdfWithPython(title, lines, options = {}) {
   return null;
 }
 
-function structuredPdf(title, document, options = {}) {
-  return renderPdfWithPython(title, [], { ...options, document }) || minimalPdf(title, reportLines(options.db, document.type, document.id, options.user), options);
+async function structuredPdf(title, document, options = {}) {
+  return await renderStructuredPdfWithJs(document, options) || renderPdfWithPython(title, [], { ...options, document }) || minimalPdf(title, reportLines(options.db, document.type, document.id, options.user), options);
 }
 
 async function extractPdfText(contentBase64) {
@@ -851,8 +1061,9 @@ function salesProductRows(db, salesOrder) {
 
 function purchaseProductRows(db, purchaseOrder) {
   return poItems(db, purchaseOrder.id).map((item, index) => ({
-    _keys: ["no", "productName", "model", "specification", "quantity", "purchaseUnitPrice", "purchaseTotal"],
+    _keys: ["no", "logoImage", "productName", "model", "specification", "quantity", "purchaseUnitPrice", "purchaseTotal"],
     no: index + 1,
+    logoImage: { type: "image", source: item.logoImageData || "" },
     productName: item.productName,
     model: item.model,
     specification: item.specification || "-",
@@ -892,7 +1103,7 @@ function purchaseTotalsRows(db, purchaseOrder) {
     current.total += Number(item.purchaseTotal || 0);
     groups.set(key, current);
   }
-  return [...groups.values()].map((item, index) => ({
+  const rows = [...groups.values()].map((item, index) => ({
     _keys: ["no", "productName", "model", "quantity", "total"],
     no: index + 1,
     productName: item.productName,
@@ -900,6 +1111,16 @@ function purchaseTotalsRows(db, purchaseOrder) {
     quantity: item.quantity,
     total: item.total
   }));
+  rows.push({
+    _keys: ["no", "productName", "model", "quantity", "total"],
+    _summary: true,
+    no: "",
+    productName: "Total Purchase Amount / 采购总金额",
+    model: "",
+    quantity: sum(items, "quantity"),
+    total: sum(items, "purchaseTotal")
+  });
+  return rows;
 }
 
 function pdfDocumentPayload(db, type, idValue, user) {
@@ -996,15 +1217,16 @@ function pdfDocumentPayload(db, type, idValue, user) {
     const relatedSalesOrder = db.sales_orders.find((so) => so.id === po.salesOrderId);
     const rows = poItems(db, po.id);
     const total = sum(rows, "purchaseTotal");
+    const totalQty = sum(rows, "quantity");
     return {
       type,
       id: idValue,
       poNo: po.poNo,
-      title: "PURCHASE ORDER / 工厂采购单",
-      subtitle: `${po.poNo} | Date: ${po.orderDate}`,
-      currencySymbol: "¥",
+      title: "PURCHASE ORDER",
+      subtitle: `PO Reference: ${po.poNo}\nPO Date: ${po.orderDate}\nRelated Sales Order: ${relatedSalesOrder?.orderNo || "Direct PO"}`,
+      currencySymbol: "CNY ",
       info: {
-        leftTitle: "Buyer / 采购商",
+        leftTitle: "Supplier / 采购商",
         leftRows: buyerRows(),
         rightTitle: "Factory / 工厂",
         rightRows: [
@@ -1025,6 +1247,13 @@ function pdfDocumentPayload(db, type, idValue, user) {
         ["Confirm Status / 确认状态", statusText(po.factoryConfirmStatus)],
         ["Production Status / 生产状态", statusText(po.productionStatus)]
       ],
+      summary: [
+        { label: "Total Items / 产品行数", value: String(rows.length) },
+        { label: "Total Qty / 总数量", value: String(totalQty) },
+        { label: "Purchase Amount / 采购金额", value: `CNY ${total.toFixed(2)}` },
+        { label: "QC Status / 质检状态", value: statusText(po.qcStatus) },
+        { label: "Factory Delivery / 工厂交期", value: po.factoryDeliveryDate || "-" }
+      ],
       sections: [
         {
           title: "Product Totals / 产品汇总",
@@ -1037,9 +1266,9 @@ function pdfDocumentPayload(db, type, idValue, user) {
         {
           title: "Item Details / 采购产品明细",
           kind: "table",
-          columns: ["#", "Product / 产品", "SKU", "Spec / 规格", "Qty", "Unit Price", "Amount"],
-          widths: [8, 43, 18, 43, 14, 20, 22],
-          moneyCols: [5, 6],
+          columns: ["#", "Logo", "Product / 产品", "SKU", "Spec / 规格", "Qty", "Unit Price", "Amount"],
+          widths: [7, 20, 40, 17, 38, 12, 17, 17],
+          moneyCols: [6, 7],
           rows: purchaseProductRows(db, po)
         },
         {
@@ -1656,6 +1885,8 @@ async function handleApi(req, res, db, user, url) {
           if (!isFactory(user)) {
             if ("specification" in raw) item.specification = raw.specification;
             if ("logoRequirement" in raw) item.logoRequirement = raw.logoRequirement;
+            if ("logoImageData" in raw) item.logoImageData = raw.logoImageData;
+            if ("logoImageName" in raw) item.logoImageName = raw.logoImageName;
             if ("colorRequirement" in raw) item.colorRequirement = raw.colorRequirement;
             if ("packagingRequirement" in raw) item.packagingRequirement = raw.packagingRequirement;
           }
@@ -1775,7 +2006,7 @@ async function handleApi(req, res, db, user, url) {
       if (isFactory(user)) return json(res, 403, { error: "Forbidden" });
       if (user.role === ROLE.SALES && so.salesId !== user.id) return json(res, 403, { error: "Forbidden" });
       const document = pdfDocumentPayload(db, type, so.id, user);
-      const pdf = structuredPdf(`订单 ${so.orderNo}`, document, { logoPath: LOGO_PATH, db, user });
+      const pdf = await structuredPdf(`订单 ${so.orderNo}`, document, { logoPath: LOGO_PATH, db, user });
       res.writeHead(200, { "content-type": "application/pdf", "content-disposition": `attachment; filename="${downloadFileName("ORDER", so.orderNo)}.pdf"` });
       return res.end(pdf);
     }
@@ -1783,7 +2014,7 @@ async function handleApi(req, res, db, user, url) {
       const title = type === "po" ? "工厂采购单" : type.toUpperCase();
       const document = pdfDocumentPayload(db, type, url.searchParams.get("id"), user);
       if (!document) return json(res, 404, { error: "Not found" });
-      const pdf = structuredPdf(title, document, { logoPath: LOGO_PATH, db, user });
+      const pdf = await structuredPdf(title, document, { logoPath: LOGO_PATH, db, user });
       const fileName = type === "pi"
         ? downloadFileName("PI", document.orderNo)
         : type === "po"
@@ -1849,6 +2080,8 @@ function poItem(orderId, raw) {
     purchaseUnitPrice: unit,
     purchaseTotal: Number(raw.purchaseTotal ?? quantity * unit),
     logoRequirement: raw.logoRequirement || "",
+    logoImageData: raw.logoImageData || "",
+    logoImageName: raw.logoImageName || "",
     colorRequirement: raw.colorRequirement || "",
     packagingRequirement: raw.packagingRequirement || ""
   };

@@ -317,6 +317,17 @@ th {
 
 tr:hover td { background: #fbfdff; }
 
+.product-logo-thumb {
+  display: block;
+  width: 72px;
+  height: 46px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  margin-bottom: 6px;
+}
+
 .tag {
   display: inline-flex;
   align-items: center;
