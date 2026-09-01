@@ -17,6 +17,7 @@ const LOGO_PATH = path.join(PUBLIC_DIR, "assets", "wder-logo.jpg");
 const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 const PORT = Number(process.env.PORT || 3000);
 const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
+const SESSION_SECRET = process.env.SESSION_SECRET || process.env.BOOTSTRAP_ADMIN_PASSWORD || "local-development-session-secret";
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -97,8 +98,6 @@ const EXTRA_STATUS_ZH = {
   "Need Rework": "需要返工"
 };
 
-const sessions = new Map();
-
 async function ensureDataFile() {
   await mkdir(path.dirname(DATA_FILE), { recursive: true });
   try {
@@ -177,10 +176,29 @@ function parseCookies(req) {
   }));
 }
 
+function signSessionToken(userId) {
+  const payload = Buffer.from(JSON.stringify({ userId, issuedAt: Date.now() })).toString("base64url");
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifySessionToken(token) {
+  if (!token || !token.includes(".")) return "";
+  const [payload, signature] = token.split(".");
+  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  if (signature.length !== expected.length) return "";
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return "";
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return String(parsed.userId || "");
+  } catch {
+    return "";
+  }
+}
+
 async function getUser(req, db) {
-  const sid = parseCookies(req).session;
-  const userId = sid && sessions.get(sid);
-  return db.users.find((user) => user.id === userId) || null;
+  const userId = verifySessionToken(parseCookies(req).session);
+  return userId ? db.users.find((user) => user.id === userId) || null : null;
 }
 
 function canViewFinance(user) {
@@ -1055,12 +1073,12 @@ async function handleApi(req, res, db, user, url) {
 
   if (resource === "login" && method === "POST") {
     const body = await bodyJson(req);
-    const found = db.users.find((u) => u.email === body.email && u.password === body.password);
+    const email = String(body.email || "").trim().toLowerCase();
+    const found = db.users.find((u) => String(u.email || "").toLowerCase() === email && u.password === body.password);
     if (!found) return json(res, 401, { error: "Invalid email or password" });
     if (!isApprovedUser(found)) return json(res, 403, { error: found.approvalStatus === "rejected" ? "账号审核未通过，请联系管理员" : "账号正在等待管理员审核" });
-    const sid = id("sess");
-    sessions.set(sid, found.id);
-    return json(res, 200, { user: publicUser(found) }, { "set-cookie": `session=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax` });
+    const token = signSessionToken(found.id);
+    return json(res, 200, { user: publicUser(found) }, { "set-cookie": `session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` });
   }
 
   if (resource === "register" && method === "POST") {
@@ -1137,8 +1155,6 @@ async function handleApi(req, res, db, user, url) {
   }
 
   if (resource === "logout" && method === "POST") {
-    const sid = parseCookies(req).session;
-    if (sid) sessions.delete(sid);
     return json(res, 200, { ok: true }, { "set-cookie": "session=; Path=/; Max-Age=0" });
   }
 
