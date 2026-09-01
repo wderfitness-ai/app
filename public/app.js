@@ -60,9 +60,9 @@ const STATUS_LABELS = {
   Cancelled: "已取消",
   Pending: "待处理",
   Confirmed: "已确认",
-  Paid: "已付清",
+  Paid: "付款完成",
   Unpaid: "未付款",
-  "Deposit Paid": "已付定金",
+  "Deposit Paid": "支付预付款",
   "Balance Pending": "待付尾款",
   "Deposit Pending": "待收定金",
   "Not Started": "未开始",
@@ -611,9 +611,8 @@ async function renderNewPurchaseOrder() {
         <label>工厂交期<input class="input" name="factoryDeliveryDate" type="date" value="${future(30)}"></label>
         <label>工厂付款状态<select class="select" name="factoryPaymentStatus">
           <option value="Unpaid">未付款</option>
-          <option value="Deposit Paid">已付定金</option>
-          <option value="Balance Pending">待付尾款</option>
-          <option value="Paid">已付清</option>
+          <option value="Deposit Paid">支付预付款</option>
+          <option value="Paid">付款完成</option>
         </select></label>
         <label>工厂确认状态<select class="select" name="factoryConfirmStatus">
           <option value="Pending">待工厂确认</option>
@@ -835,6 +834,7 @@ async function renderPurchaseOrderModal(id) {
 
 function purchaseOrderView(po, factoryMode) {
   const financeColumns = po.items.some((item) => item.purchaseUnitPrice !== undefined);
+  const canEditPayment = canEditPurchasePaymentStatus();
   return `
     <section class="panel">
       <div class="toolbar">
@@ -849,7 +849,7 @@ function purchaseOrderView(po, factoryMode) {
         ${field("工厂", po.factoryName)}
         <label class="field"><span>工厂交期</span><input class="input" id="factoryDeliveryDate" type="date" value="${po.factoryDeliveryDate || ""}"></label>
         ${field("确认状态", statusLabel(po.factoryConfirmStatus))}
-        ${field("付款状态", statusLabel(po.factoryPaymentStatus))}
+        ${canEditPayment ? purchasePaymentStatusField(po.factoryPaymentStatus) : field("付款状态", statusLabel(po.factoryPaymentStatus))}
         ${field("生产状态", statusLabel(po.productionStatus))}
         ${field("质检状态", statusLabel(po.qcStatus))}
       </div>
@@ -899,6 +899,21 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
       </tr>`).join("")}
     </tbody>
   </table></div>`;
+}
+
+function canEditPurchasePaymentStatus() {
+  return ["Admin", "Sales"].includes(state.user?.role);
+}
+
+function purchasePaymentStatusField(value) {
+  const options = [
+    ["Unpaid", "未付款"],
+    ["Deposit Paid", "支付预付款"],
+    ["Paid", "付款完成"]
+  ];
+  return `<label class="field"><span>付款状态</span><select class="select" id="factoryPaymentStatus">
+    ${options.map(([status, label]) => `<option value="${status}" ${status === value ? "selected" : ""}>${label}</option>`).join("")}
+  </select></label>`;
 }
 
 function qcPhotoPanel(po) {
@@ -1036,15 +1051,17 @@ function bindPoActions(po, factoryMode) {
       }
       return item;
     }));
+    const payload = {
+      productionStatus: $("#poStatus").value,
+      factoryConfirmStatus: "Confirmed",
+      factoryDeliveryDate: $("#factoryDeliveryDate")?.value || po.factoryDeliveryDate,
+      items,
+      note: "页面更新工厂交期、生产状态、付款状态和采购单价"
+    };
+    if (canEditPurchasePaymentStatus()) payload.factoryPaymentStatus = $("#factoryPaymentStatus")?.value || po.factoryPaymentStatus;
     await api(`/api/purchase-orders/${po.id}`, {
       method: "PATCH",
-      body: JSON.stringify({
-        productionStatus: $("#poStatus").value,
-        factoryConfirmStatus: "Confirmed",
-        factoryDeliveryDate: $("#factoryDeliveryDate")?.value || po.factoryDeliveryDate,
-        items,
-        note: "页面更新工厂交期、生产状态和采购单价"
-      })
+      body: JSON.stringify(payload)
     });
     factoryMode ? renderPurchaseOrderDetail(po.id) : renderPurchaseOrderModal(po.id);
   });

@@ -95,9 +95,9 @@ const STATUS_ZH = {
 const EXTRA_STATUS_ZH = {
   Pending: "待处理",
   Confirmed: "已确认",
-  Paid: "已付清",
+  Paid: "付款完成",
   Unpaid: "未付款",
-  "Deposit Paid": "已付定金",
+  "Deposit Paid": "支付预付款",
   "Balance Pending": "待付尾款",
   "Deposit Pending": "待收定金",
   "Not Started": "未开始",
@@ -243,6 +243,10 @@ function canManageOps(user) {
 
 function canManageFinance(user) {
   return [ROLE.ADMIN, ROLE.FINANCE].includes(user?.role);
+}
+
+function canEditPurchasePayment(user) {
+  return [ROLE.ADMIN, ROLE.SALES].includes(user?.role);
 }
 
 function isFactory(user) {
@@ -1951,16 +1955,21 @@ async function handleApi(req, res, db, user, url) {
       const po = db.purchase_orders.find((o) => o.id === resourceId);
       if (!po) return json(res, 404, { error: "Not found" });
       if (isFactory(user) && po.factoryId !== user.factoryId) return json(res, 403, { error: "Forbidden" });
-      if (!isFactory(user) && ![ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE].includes(user.role)) return json(res, 403, { error: "Forbidden" });
+      if (!isFactory(user) && ![ROLE.ADMIN, ROLE.SALES, ROLE.MERCH, ROLE.FINANCE].includes(user.role)) return json(res, 403, { error: "Forbidden" });
       const before = { ...po };
       const body = await bodyJson(req);
       const oldStatus = po.productionStatus;
       const oldFactoryDeliveryDate = po.factoryDeliveryDate;
       const allowedKeys = isFactory(user)
         ? ["factoryConfirmStatus", "productionStatus", "qcStatus", "remark", "factoryDeliveryDate"]
-        : canManageFinance(user)
+        : user.role === ROLE.ADMIN
           ? Object.keys(body)
-          : ["factoryConfirmStatus", "productionStatus", "qcStatus", "remark", "factoryDeliveryDate"];
+          : user.role === ROLE.SALES
+            ? ["factoryPaymentStatus"]
+            : user.role === ROLE.MERCH
+              ? ["factoryConfirmStatus", "productionStatus", "qcStatus", "remark", "factoryDeliveryDate"]
+              : [];
+      if ("factoryPaymentStatus" in body && !canEditPurchasePayment(user)) return json(res, 403, { error: "只有管理员和销售可以修改采购单付款状态" });
       for (const key of allowedKeys) if (key in body) po[key] = body[key];
       if (Array.isArray(body.items) && (isFactory(user) || [ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE].includes(user.role))) {
         for (const raw of body.items) {
