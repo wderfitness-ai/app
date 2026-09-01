@@ -635,6 +635,7 @@ async function renderNewPurchaseOrder() {
       <div class="toolbar">
         <h2 style="margin:0">采购产品明细</h2>
         <div class="filters">
+          <button class="btn small" type="button" id="bulkPoPrice">一键填充单价</button>
           <label class="btn small">一键填充 Logo 图片<input class="visually-hidden bulk-po-logo-file" type="file" accept="image/*"></label>
           <button class="btn" type="button" id="addPoItem">添加一行</button>
         </div>
@@ -697,6 +698,16 @@ async function renderNewPurchaseOrder() {
       };
     });
   };
+  $("#bulkPoPrice").addEventListener("click", () => {
+    const value = prompt("请输入要填充到全部产品行的单价（人民币）", "");
+    if (value === null) return;
+    const price = Number(String(value).trim());
+    if (!Number.isFinite(price) || price < 0) return alert("请输入有效的人民币单价");
+    $$(".po-purchase-price", poItemsBody).forEach((input) => {
+      input.value = price;
+      recalcNewPoRow(input.closest("tr"));
+    });
+  });
   $("#addPoItem").addEventListener("click", () => {
     poItemsBody.insertAdjacentHTML("beforeend", poItemRowTemplate(products.items));
     bindPoItemRows();
@@ -912,7 +923,10 @@ function purchaseOrderView(po, factoryMode) {
 
 function purchaseItemsEditTable(items = [], factoryMode = false) {
   if (!items.length) return `<p class="muted">暂无数据</p>`;
-  return `${factoryMode ? "" : `<div class="filters po-logo-actions"><label class="btn small">一键填充 Logo 图片<input class="visually-hidden bulk-edit-po-logo-file" type="file" accept="image/*"></label><span class="muted">选择一次图片，可填充到当前采购单全部产品行。</span></div>`}
+  return `<div class="filters po-logo-actions">
+    <button class="btn small" id="bulkEditPoPrice" type="button">一键填充单价</button>
+    ${factoryMode ? "" : `<label class="btn small">一键填充 Logo 图片<input class="visually-hidden bulk-edit-po-logo-file" type="file" accept="image/*"></label><span class="muted">选择一次图片，可填充到当前采购单全部产品行。</span>`}
+  </div>
   <div class="table-wrap"><table>
     <thead><tr><th>Product / 产品</th><th>SKU / 型号</th><th>Spec / 规格</th><th>Qty / 数量</th><th>Pieces / 件数</th><th>Freight Weight / 计费重量</th><th>Unit Price / 单价（CNY）</th><th>Product Amount / 金额（CNY）</th><th>产品 Logo</th><th>包装</th></tr></thead>
     <tbody>
@@ -1089,6 +1103,16 @@ function bindPoActions(po, factoryMode) {
     recalcPoTotals();
   }));
   recalcPoTotals();
+  $("#bulkEditPoPrice")?.addEventListener("click", () => {
+    const value = prompt("请输入要填充到全部产品行的单价（人民币）", "");
+    if (value === null) return;
+    const price = Number(String(value).trim());
+    if (!Number.isFinite(price) || price < 0) return alert("请输入有效的人民币单价");
+    $$(".po-edit-price").forEach((input) => {
+      input.value = price;
+    });
+    recalcPoTotals();
+  });
   $(".bulk-edit-po-logo-file")?.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
