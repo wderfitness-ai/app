@@ -1408,7 +1408,7 @@ function pdfDocumentPayload(db, type, idValue, user) {
           items: purchaseFinanceItems(total)
         }
       ],
-      notes: [po.remark || "Factory must confirm delivery date, product details, logo/artwork and packing before mass production."]
+      notes: po.remark ? [po.remark] : []
     };
   }
 
