@@ -1421,7 +1421,7 @@ async function renderSettings() {
   $("#userAccountList").innerHTML = simpleTable(users.items, ["name", "email", "role", "approvalStatus", "factoryName", "actions"], ["用户名", "邮箱", "类型", "审核状态", "工厂", "操作"], (row, key) => {
     if (key === "role") return roleLabel(row.role);
     if (key === "approvalStatus") return tag(statusLabel(row.approvalStatus), row.approvalStatus);
-    if (key === "actions") return `<button class="btn small" data-reset-password="${row.id}" data-reset-email="${escapeAttr(row.email)}">重置密码</button>`;
+    if (key === "actions") return `<button class="btn small" data-reset-password="${row.id}" data-reset-email="${escapeAttr(row.email)}">重置密码</button> <button class="btn small danger" data-delete-user="${row.id}" data-delete-email="${escapeAttr(row.email)}">删除账号</button>`;
     return displayValue(row[key]);
   });
   $$("[data-approve-user]").forEach((btn) => btn.addEventListener("click", async () => {
@@ -1438,6 +1438,12 @@ async function renderSettings() {
     if (!newPassword) return;
     await api(`/api/users/${btn.dataset.resetPassword}`, { method: "PATCH", body: JSON.stringify({ newPassword }) });
     alert("密码已重置");
+  }));
+  $$("[data-delete-user]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (!confirm(`确认删除账号 ${btn.dataset.deleteEmail}？此操作只删除账号信息，不删除订单、采购单和文件。`)) return;
+    await api(`/api/users/${btn.dataset.deleteUser}`, { method: "DELETE" });
+    alert("账号已删除");
+    renderSettings();
   }));
   $("#auditList").innerHTML = simpleTable(logs.items, ["createdAt", "actorName", "entityType", "action"], ["时间", "操作人", "对象", "动作"]);
 }

@@ -1728,6 +1728,20 @@ async function handleApi(req, res, db, user, url) {
       await writeDb(db);
       return json(res, 200, publicUser(target));
     }
+    if (method === "DELETE" && resourceId) {
+      if (!requireRole(user, res, [ROLE.ADMIN])) return;
+      if (resourceId === user.id) return json(res, 400, { error: "不能删除当前登录的管理员账号" });
+      const index = db.users.findIndex((item) => item.id === resourceId);
+      if (index < 0) return json(res, 404, { error: "User not found" });
+      const target = db.users[index];
+      if (db.sales_orders.some((order) => order.salesId === target.id)) {
+        return json(res, 409, { error: "该账号已关联客户订单，不能直接删除；请先保留账号用于订单归档。" });
+      }
+      db.users.splice(index, 1);
+      audit(db, user, "user", resourceId, "delete", { id: resourceId, role: target.role }, { deleted: true });
+      await writeDb(db);
+      return json(res, 200, { ok: true, id: resourceId });
+    }
   }
 
   if (resource === "dashboard" && method === "GET") {
