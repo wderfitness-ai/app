@@ -656,7 +656,8 @@ function drawPdfTable(doc, section, currency) {
   const x = PDF_MARGIN;
   const widths = section.widths.map(pt);
   const tableWidth = widths.reduce((total, width) => total + width, 0);
-  const scale = Math.min(1, (doc.page.width - PDF_MARGIN * 2) / tableWidth);
+  const availableWidth = doc.page.width - PDF_MARGIN * 2;
+  const scale = tableWidth > 0 ? availableWidth / tableWidth : 1;
   const scaled = widths.map((width) => width * scale);
   const compact = Boolean(doc._pdfCompact);
   const headerHeight = compact ? 28 : 30;

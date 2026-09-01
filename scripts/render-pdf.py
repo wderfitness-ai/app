@@ -5,7 +5,7 @@ import base64
 from pathlib import Path
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -169,7 +169,15 @@ def key_value_table(rows, cols=4, currency="$"):
     return table
 
 
-def product_table(columns, rows, widths, money_cols=None, currency="$"):
+def fit_widths(widths, available_width):
+    total = sum(widths)
+    if total <= 0:
+        return widths
+    scale = available_width / total
+    return [width * scale for width in widths]
+
+
+def product_table(columns, rows, widths, money_cols=None, currency="$", available_width=168 * mm):
     money_cols = money_cols or []
     data = [[p(label, S["small_white"]) for label in columns]]
     row_styles = []
@@ -182,7 +190,7 @@ def product_table(columns, rows, widths, money_cols=None, currency="$"):
         data.append(rendered)
         if row.get("_summary"):
             row_styles.append(("BACKGROUND", (0, len(data) - 1), (-1, len(data) - 1), SOFT_RED))
-    table = Table(data, colWidths=widths, repeatRows=1)
+    table = Table(data, colWidths=fit_widths(widths, available_width), repeatRows=1)
     style = table_style(header=True, align_right_cols=money_cols)
     for command in row_styles:
         style.add(*command)
@@ -229,7 +237,7 @@ def header(title, subtitle, logo_path):
     return table
 
 
-def build_structured_document(doc_payload, logo_path):
+def build_structured_document(doc_payload, logo_path, available_width=168 * mm):
     flow = [header(doc_payload.get("title", "订单文件"), doc_payload.get("subtitle", ""), logo_path), Spacer(1, 8)]
     currency = doc_payload.get("currencySymbol", "$")
 
@@ -252,7 +260,7 @@ def build_structured_document(doc_payload, logo_path):
         flow.append(p(section.get("title", ""), S["h2"]))
         kind = section.get("kind")
         if kind == "table":
-            flow.append(product_table(section["columns"], section["rows"], [w * mm for w in section["widths"]], section.get("moneyCols", []), section.get("currencySymbol", currency)))
+            flow.append(product_table(section["columns"], section["rows"], [w * mm for w in section["widths"]], section.get("moneyCols", []), section.get("currencySymbol", currency), available_width))
         elif kind == "summary":
             flow.append(summary_table(section.get("items", [])))
         elif kind == "kv":
@@ -281,16 +289,18 @@ def footer(canvas, doc):
     canvas.setFont(FONT_NAME, 7)
     canvas.setFillColor(MUTED)
     canvas.drawString(18 * mm, 10 * mm, "WDER Fitness Equipment")
-    canvas.drawRightString(PAGE_WIDTH - 18 * mm, 10 * mm, f"Page {doc.page}")
+    canvas.drawRightString(doc.pagesize[0] - 18 * mm, 10 * mm, f"Page {doc.page}")
     canvas.restoreState()
 
 
 def main():
     payload = json.loads(sys.stdin.read())
     buffer = io.BytesIO()
+    document_payload = payload.get("document") or {}
+    page_size = landscape(letter) if document_payload.get("layout") == "landscape" else letter
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=letter,
+        pagesize=page_size,
         leftMargin=18 * mm,
         rightMargin=18 * mm,
         topMargin=16 * mm,
@@ -299,7 +309,7 @@ def main():
     )
     logo_path = payload.get("logoPath", "")
     if payload.get("document"):
-        flow = build_structured_document(payload["document"], logo_path)
+        flow = build_structured_document(document_payload, logo_path, doc.width)
     else:
         flow = build_legacy(payload.get("title", "订单 PDF"), payload.get("lines", []), logo_path)
     doc.build(flow, onFirstPage=footer, onLaterPages=footer)
