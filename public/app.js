@@ -622,7 +622,10 @@ async function renderNewPurchaseOrder() {
       </div>
       <div class="toolbar">
         <h2 style="margin:0">采购产品明细</h2>
-        <button class="btn" type="button" id="addPoItem">添加一行</button>
+        <div class="filters">
+          <label class="btn small">一键填充 Logo 图片<input class="visually-hidden bulk-po-logo-file" type="file" accept="image/*"></label>
+          <button class="btn" type="button" id="addPoItem">添加一行</button>
+        </div>
       </div>
       <div class="table-wrap"><table><thead><tr><th>Product / 产品</th><th>SKU / 型号</th><th>Spec / 规格</th><th>Qty / 数量</th><th>Pieces / 件数</th><th>Freight Weight / 计费重量</th><th>Unit Price / 单价（人民币）</th><th>Product Amount / 金额（人民币）</th><th>产品 Logo</th><th>包装</th><th>操作</th></tr></thead><tbody id="poItemsBody">
         ${poItemRowTemplate(products.items)}
@@ -632,6 +635,7 @@ async function renderNewPurchaseOrder() {
     </form>`);
   bindGoButtons();
   const poItemsBody = $("#poItemsBody");
+  let newPoBulkLogo = null;
   const recalcNewPoRow = (row) => {
     const quantity = Number($(".po-quantity", row)?.value || 0);
     const price = Number($(".po-purchase-price", row)?.value || 0);
@@ -652,6 +656,17 @@ async function renderNewPurchaseOrder() {
     $$(".po-quantity, .po-purchase-price", poItemsBody).forEach((input) => {
       input.oninput = () => recalcNewPoRow(input.closest("tr"));
     });
+    $$(".po-logo-file", poItemsBody).forEach((input) => {
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+          applyPoLogoToRows([input.closest("tr")], await readPoLogo(file));
+        } catch (error) {
+          alert(error.message);
+        }
+      };
+    });
     $$(".remove-po-item", poItemsBody).forEach((button) => {
       button.onclick = () => {
         if ($$("tr", poItemsBody).length <= 1) return alert("至少保留一条采购产品明细");
@@ -662,8 +677,19 @@ async function renderNewPurchaseOrder() {
   $("#addPoItem").addEventListener("click", () => {
     poItemsBody.insertAdjacentHTML("beforeend", poItemRowTemplate(products.items));
     bindPoItemRows();
+    if (newPoBulkLogo) applyPoLogoToRows([poItemsBody.lastElementChild], newPoBulkLogo);
   });
   bindPoItemRows();
+  $(".bulk-po-logo-file").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      newPoBulkLogo = await readPoLogo(file);
+      applyPoLogoToRows($$("#poItemsBody tr"), newPoBulkLogo);
+    } catch (error) {
+      alert(error.message);
+    }
+  });
   $("#newPoForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const fd = new FormData(event.currentTarget);
@@ -674,7 +700,6 @@ async function renderNewPurchaseOrder() {
       const opt = productSelect.selectedOptions[0];
       const quantity = Number($(".po-quantity", row).value || 0);
       const purchaseUnitPrice = Number($(".po-purchase-price", row).value || 0);
-      const logoFile = $(".po-logo-file", row)?.files?.[0];
       return {
         productId: productSelect.value,
         productName: opt.dataset.name,
@@ -686,8 +711,8 @@ async function renderNewPurchaseOrder() {
         purchaseUnitPrice,
         purchaseTotal: quantity * purchaseUnitPrice,
         logoRequirement: $(".po-logo", row).value,
-        logoImageData: logoFile ? await fileToDataUrl(logoFile, { maxRawBytes: 2_000_000 }) : "",
-        logoImageName: logoFile?.name || "",
+        logoImageData: row.dataset.logoImageData || "",
+        logoImageName: row.dataset.logoImageName || "",
         colorRequirement: "",
         packagingRequirement: $(".po-packaging", row).value
       };
@@ -724,7 +749,7 @@ function poItemRowTemplate(products) {
     <td><input class="input po-freight-weight" value=""></td>
     <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
     <td class="po-line-total">${moneyCny(products[0]?.defaultPurchasePrice || 1)}</td>
-    <td><input class="input po-logo-file" type="file" accept="image/*"><input class="input po-logo" type="hidden" value="按确认稿"></td>
+    <td class="po-logo-cell"><span class="muted po-logo-empty">未上传</span><input class="input po-logo-file" type="file" accept="image/*"><input class="input po-logo" type="hidden" value="按确认稿"></td>
     <td><input class="input po-packaging" value="出口纸箱"></td>
     <td><button class="btn small danger remove-po-item" type="button">删除</button></td>
   </tr>`;
@@ -847,7 +872,8 @@ function purchaseOrderView(po, factoryMode) {
 
 function purchaseItemsEditTable(items = [], factoryMode = false) {
   if (!items.length) return `<p class="muted">暂无数据</p>`;
-  return `<div class="table-wrap"><table>
+  return `${factoryMode ? "" : `<div class="filters po-logo-actions"><label class="btn small">一键填充 Logo 图片<input class="visually-hidden bulk-edit-po-logo-file" type="file" accept="image/*"></label><span class="muted">选择一次图片，可填充到当前采购单全部产品行。</span></div>`}
+  <div class="table-wrap"><table>
     <thead><tr><th>Product / 产品</th><th>SKU / 型号</th><th>Spec / 规格</th><th>Qty / 数量</th><th>Pieces / 件数</th><th>Freight Weight / 计费重量</th><th>Unit Price / 单价（CNY）</th><th>Product Amount / 金额（CNY）</th><th>产品 Logo</th><th>包装</th></tr></thead>
     <tbody>
       ${items.map((item) => `<tr data-po-item-id="${item.id}" data-po-qty="${Number(item.quantity || 0)}">
@@ -859,7 +885,7 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
         <td>${factoryMode ? displayValue(item.freightWeight) : `<input class="input po-edit-freight-weight" value="${escapeAttr(item.freightWeight || "")}">`}</td>
         <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
         <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
-        <td>
+        <td class="po-logo-cell">
           ${item.logoImageData ? `<img class="product-logo-thumb" src="${item.logoImageData}" alt="产品 Logo">` : `<span class="muted">未上传</span>`}
           ${factoryMode ? "" : `<input class="input po-edit-logo-file" type="file" accept="image/*">`}
         </td>
@@ -880,9 +906,28 @@ function bindPoActions(po, factoryMode) {
     });
   };
   $$(".po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
+  $(".bulk-edit-po-logo-file")?.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      applyPoLogoToRows($$("[data-po-item-id]"), await readPoLogo(file));
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+  $$(".po-edit-logo-file").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        applyPoLogoToRows([input.closest("tr")], await readPoLogo(file));
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+  });
   $("#savePoStatus").addEventListener("click", async () => {
     const items = await Promise.all($$("[data-po-item-id]").map(async (row) => {
-      const logoFile = $(".po-edit-logo-file", row)?.files?.[0];
       const item = {
         id: row.dataset.poItemId,
         quantity: readPoQuantity(row),
@@ -893,9 +938,9 @@ function bindPoActions(po, factoryMode) {
         item.qtyLabel = $(".po-edit-qty-label", row)?.value || "";
         item.freightWeight = $(".po-edit-freight-weight", row)?.value || "";
       }
-      if (logoFile) {
-        item.logoImageData = await fileToDataUrl(logoFile, { maxRawBytes: 2_000_000 });
-        item.logoImageName = logoFile.name;
+      if (row.dataset.logoImageData) {
+        item.logoImageData = row.dataset.logoImageData;
+        item.logoImageName = row.dataset.logoImageName || "product-logo";
       }
       return item;
     }));
@@ -984,6 +1029,35 @@ function toBase64(file) {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",")[1]);
     reader.readAsDataURL(file);
+  });
+}
+
+async function readPoLogo(file) {
+  return {
+    name: file.name,
+    data: await fileToDataUrl(file, { maxRawBytes: 2_000_000 })
+  };
+}
+
+function applyPoLogoToRows(rows, logo) {
+  rows.filter(Boolean).forEach((row) => {
+    row.dataset.logoImageData = logo.data;
+    row.dataset.logoImageName = logo.name;
+    const cell = $(".po-logo-cell", row);
+    if (!cell) return;
+    const existing = $(".product-logo-thumb", cell);
+    if (existing) {
+      existing.src = logo.data;
+      existing.alt = logo.name;
+      return;
+    }
+    const empty = $(".po-logo-empty", cell) || $(".muted", cell);
+    const image = document.createElement("img");
+    image.className = "product-logo-thumb";
+    image.src = logo.data;
+    image.alt = logo.name;
+    cell.insertBefore(image, empty || cell.firstChild);
+    if (empty) empty.remove();
   });
 }
 
