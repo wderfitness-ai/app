@@ -1032,38 +1032,43 @@ function bindPoActions(po, factoryMode) {
     });
   });
   $("#savePoStatus").addEventListener("click", async () => {
-    const items = await Promise.all($$("[data-po-item-id]").map(async (row) => {
-      const item = {
-        id: row.dataset.poItemId,
-        quantity: readPoQuantity(row),
-        purchaseUnitPrice: Number($(".po-edit-price", row)?.value || 0)
+    try {
+      const items = await Promise.all($$("[data-po-item-id]").map(async (row) => {
+        const item = {
+          id: row.dataset.poItemId,
+          quantity: readPoQuantity(row),
+          purchaseUnitPrice: Number($(".po-edit-price", row)?.value || 0)
+        };
+        if (!factoryMode) {
+          item.specification = $(".po-edit-specification", row)?.value || "";
+          item.qtyLabel = $(".po-edit-qty-label", row)?.value || "";
+          item.freightWeight = calculateFreightWeight(item.specification, item.quantity);
+        } else {
+          item.freightWeight = row.dataset.freightWeight || "";
+        }
+        if (row.dataset.logoImageData) {
+          item.logoImageData = row.dataset.logoImageData;
+          item.logoImageName = row.dataset.logoImageName || "product-logo";
+        }
+        return item;
+      }));
+      const payload = {
+        productionStatus: $("#poStatus").value,
+        factoryConfirmStatus: "Confirmed",
+        factoryDeliveryDate: $("#factoryDeliveryDate")?.value || po.factoryDeliveryDate,
+        items,
+        note: "页面更新工厂交期、生产状态、付款状态和采购单价"
       };
-      if (!factoryMode) {
-        item.specification = $(".po-edit-specification", row)?.value || "";
-        item.qtyLabel = $(".po-edit-qty-label", row)?.value || "";
-        item.freightWeight = calculateFreightWeight(item.specification, item.quantity);
-      } else {
-        item.freightWeight = row.dataset.freightWeight || "";
-      }
-      if (row.dataset.logoImageData) {
-        item.logoImageData = row.dataset.logoImageData;
-        item.logoImageName = row.dataset.logoImageName || "product-logo";
-      }
-      return item;
-    }));
-    const payload = {
-      productionStatus: $("#poStatus").value,
-      factoryConfirmStatus: "Confirmed",
-      factoryDeliveryDate: $("#factoryDeliveryDate")?.value || po.factoryDeliveryDate,
-      items,
-      note: "页面更新工厂交期、生产状态、付款状态和采购单价"
-    };
-    if (canEditPurchasePaymentStatus()) payload.factoryPaymentStatus = $("#factoryPaymentStatus")?.value || po.factoryPaymentStatus;
-    await api(`/api/purchase-orders/${po.id}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload)
-    });
-    factoryMode ? renderPurchaseOrderDetail(po.id) : renderPurchaseOrderModal(po.id);
+      if (canEditPurchasePaymentStatus()) payload.factoryPaymentStatus = $("#factoryPaymentStatus")?.value || po.factoryPaymentStatus;
+      await api(`/api/purchase-orders/${po.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      alert("保存成功");
+      factoryMode ? renderPurchaseOrderDetail(po.id) : renderPurchaseOrderModal(po.id);
+    } catch (error) {
+      alert(error.message || "保存失败");
+    }
   });
   $("#createQc")?.addEventListener("click", async () => {
     await api("/api/qc", { method: "POST", body: JSON.stringify({ purchaseOrderId: po.id, result: "Passed", remark: "页面快速创建 QC：全部通过" }) });
