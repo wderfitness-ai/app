@@ -553,6 +553,21 @@ function normalizePdfDate(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
+function normalizeImportedOrderNo(value = "") {
+  const textValue = String(value || "").trim();
+  const prefixed = textValue.match(/(?:ORD|SO|PO|Q)-(\d{8})-(\d{3})/i);
+  if (prefixed) return `SO-${prefixed[1]}-${prefixed[2]}`;
+  const fullDate = textValue.match(/(\d{8})[-_](\d{3})/);
+  if (fullDate) return `SO-${fullDate[1]}-${fullDate[2]}`;
+  const shortDate = textValue.match(/(\d{2})(\d{2})(\d{2})[-_](\d{3})/);
+  if (shortDate) return `SO-20${shortDate[1]}${shortDate[2]}${shortDate[3]}-${shortDate[4]}`;
+  return "";
+}
+
+function extractOrderNoFromFileName(fileName = "") {
+  return normalizeImportedOrderNo(String(fileName || "").replace(/\.[^.]+$/, ""));
+}
+
 function addDays(dateValue, days) {
   const d = new Date(dateValue);
   d.setDate(d.getDate() + Number(days || 30));
@@ -562,7 +577,8 @@ function addDays(dateValue, days) {
 function parseImportedSalesOrderPdf(textContent) {
   const textValue = String(textContent || "").replace(/\r/g, "");
   const lines = textValue.split("\n").map((line) => line.trim()).filter(Boolean);
-  const quoteRef = textValue.match(/Quote Reference:\s*([A-Z]-\d{8}-\d+)/i)?.[1] || "";
+  const rawQuoteRef = textValue.match(/Quote Reference:\s*((?:ORD|SO|PO|Q)-\d{8}-\d{3})/i)?.[1] || "";
+  const quoteRef = normalizeImportedOrderNo(rawQuoteRef);
   const quoteDate = normalizePdfDate(textValue.match(/Quote Date:\s*([0-9/-]+)/i)?.[1]);
   const deliveryTerm = (textValue.match(/Trade term:\s*([A-Z]+)/i)?.[1] || "FOB").toUpperCase();
   const currency = textValue.match(/Currency:\s*([A-Z]+)/i)?.[1] || "USD";
@@ -677,7 +693,7 @@ function parseImportedSalesOrderPdf(textContent) {
       remark: `PDF 导入客户：${quoteRef || "无报价号"}`
     },
     order: {
-      orderNo: quoteRef ? quoteRef.replace(/^Q-/, "SO-") : "",
+      orderNo: quoteRef,
       orderDate: quoteDate,
       deliveryTerm,
       destinationCountry: country,
@@ -1302,13 +1318,18 @@ async function handleApi(req, res, db, user, url) {
     if (!requireRole(user, res, [ROLE.ADMIN, ROLE.SALES])) return;
     const body = await bodyJson(req);
     if (!body.contentBase64 || !body.fileName) return json(res, 400, { error: "请上传客户订单 PDF 文件" });
+    const fileOrderNo = extractOrderNoFromFileName(body.fileName);
     const extracted = await extractPdfText(body.contentBase64);
     const parsed = parseImportedSalesOrderPdf(extracted.text);
+    const preferredOrderNo = fileOrderNo || parsed.order.orderNo || nextNo(db.sales_orders, "SO");
+    if (db.sales_orders.some((item) => item.orderNo === preferredOrderNo)) {
+      return json(res, 409, { error: `订单号 ${preferredOrderNo} 已存在，请确认上传文件是否重复导入。` });
+    }
     const customer = ensureImportedCustomer(db, parsed);
     const order = {
       id: id("so"),
       ...parsed.order,
-      orderNo: parsed.order.orderNo && !db.sales_orders.some((item) => item.orderNo === parsed.order.orderNo) ? parsed.order.orderNo : nextNo(db.sales_orders, "SO"),
+      orderNo: preferredOrderNo,
       customerId: customer.id,
       salesId: user.id,
       createdAt: now(),
@@ -1342,6 +1363,7 @@ async function handleApi(req, res, db, user, url) {
       order: visibleSalesOrder(db, order, user),
       parsed: {
         quoteRef: parsed.quoteRef,
+        fileOrderNo,
         pages: extracted.pages,
         itemCount: parsed.items.length,
         grandTotal: parsed.grandTotal
