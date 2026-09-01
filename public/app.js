@@ -1391,15 +1391,26 @@ async function renderSettings() {
       <div id="userApprovalList">加载中...</div>
     </section>
     <section class="panel" style="margin-top:14px">
+      <h2>账号管理</h2>
+      <p class="muted">管理员可为已注册账号重置密码。系统不会显示用户原密码。</p>
+      <div id="userAccountList">加载中...</div>
+    </section>
+    <section class="panel" style="margin-top:14px">
       <h2>权限矩阵</h2>
       ${permissionMatrix()}
       <h2>最近审计日志</h2>
       <div id="auditList"></div>
     </section>`);
-  const [logs, pending] = await Promise.all([api("/api/audit-logs"), api("/api/users?status=pending")]);
+  const [logs, pending, users] = await Promise.all([api("/api/audit-logs"), api("/api/users?status=pending"), api("/api/users")]);
   $("#userApprovalList").innerHTML = simpleTable(pending.items, ["name", "email", "role", "factoryName", "businessLicenseFileName", "createdAt", "actions"], ["用户名", "邮箱", "类型", "工厂", "营业执照", "申请时间", "操作"], (row, key) => {
     if (key === "role") return roleLabel(row.role);
     if (key === "actions") return `<button class="btn small primary" data-approve-user="${row.id}">通过</button> <button class="btn small danger" data-reject-user="${row.id}">拒绝</button>`;
+    return displayValue(row[key]);
+  });
+  $("#userAccountList").innerHTML = simpleTable(users.items, ["name", "email", "role", "approvalStatus", "factoryName", "actions"], ["用户名", "邮箱", "类型", "审核状态", "工厂", "操作"], (row, key) => {
+    if (key === "role") return roleLabel(row.role);
+    if (key === "approvalStatus") return tag(statusLabel(row.approvalStatus), row.approvalStatus);
+    if (key === "actions") return `<button class="btn small" data-reset-password="${row.id}" data-reset-email="${escapeAttr(row.email)}">重置密码</button>`;
     return displayValue(row[key]);
   });
   $$("[data-approve-user]").forEach((btn) => btn.addEventListener("click", async () => {
@@ -1410,6 +1421,12 @@ async function renderSettings() {
     const rejectedReason = prompt("请输入拒绝原因", "资料不完整") || "管理员拒绝";
     await api(`/api/users/${btn.dataset.rejectUser}`, { method: "PATCH", body: JSON.stringify({ approvalStatus: "rejected", rejectedReason }) });
     renderSettings();
+  }));
+  $$("[data-reset-password]").forEach((btn) => btn.addEventListener("click", async () => {
+    const newPassword = prompt(`请输入 ${btn.dataset.resetEmail} 的新密码（至少 6 位）`, "");
+    if (!newPassword) return;
+    await api(`/api/users/${btn.dataset.resetPassword}`, { method: "PATCH", body: JSON.stringify({ newPassword }) });
+    alert("密码已重置");
   }));
   $("#auditList").innerHTML = simpleTable(logs.items, ["createdAt", "actorName", "entityType", "action"], ["时间", "操作人", "对象", "动作"]);
 }

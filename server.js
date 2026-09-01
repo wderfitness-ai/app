@@ -1694,6 +1694,15 @@ async function handleApi(req, res, db, user, url) {
       if (!target) return json(res, 404, { error: "User not found" });
       const body = await bodyJson(req);
       const before = { ...target };
+      if ("newPassword" in body) {
+        const newPassword = String(body.newPassword || "");
+        if (newPassword.length < 6) return json(res, 400, { error: "新密码至少需要 6 位" });
+        target.password = newPassword;
+        target.updatedAt = now();
+        audit(db, user, "user", target.id, "password_reset", publicUser(before), publicUser(target));
+        await writeDb(db);
+        return json(res, 200, publicUser(target));
+      }
       if (body.approvalStatus === "approved") {
         target.approvalStatus = "approved";
         target.approvedBy = user.id;
