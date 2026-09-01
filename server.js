@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { PDFParse } from "pdf-parse";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = process.env.DATA_FILE || (process.env.VERCEL ? path.join("/tmp", "trade-order-database.json") : path.join(__dirname, "data", "database.json"));
@@ -495,15 +496,14 @@ function structuredPdf(title, document, options = {}) {
   return renderPdfWithPython(title, [], { ...options, document }) || minimalPdf(title, reportLines(options.db, document.type, document.id, options.user), options);
 }
 
-function extractPdfText(contentBase64) {
-  const result = spawnSync(PYTHON_BIN, [PDF_EXTRACT_SCRIPT], {
-    input: JSON.stringify({ contentBase64 }),
-    maxBuffer: 20 * 1024 * 1024
-  });
-  if (result.status !== 0) {
-    throw new Error(result.stderr?.toString() || result.error?.message || "PDF 解析失败");
+async function extractPdfText(contentBase64) {
+  const parser = new PDFParse({ data: Buffer.from(contentBase64, "base64") });
+  try {
+    const result = await parser.getText();
+    return { pages: result.total || result.pages?.length || 0, text: result.text || "" };
+  } finally {
+    await parser.destroy();
   }
-  return JSON.parse(result.stdout.toString());
 }
 
 const PRODUCT_ZH = {
@@ -1265,7 +1265,7 @@ async function handleApi(req, res, db, user, url) {
     if (!requireRole(user, res, [ROLE.ADMIN, ROLE.SALES])) return;
     const body = await bodyJson(req);
     if (!body.contentBase64 || !body.fileName) return json(res, 400, { error: "请上传客户订单 PDF 文件" });
-    const extracted = extractPdfText(body.contentBase64);
+    const extracted = await extractPdfText(body.contentBase64);
     const parsed = parseImportedSalesOrderPdf(extracted.text);
     const customer = ensureImportedCustomer(db, parsed);
     const order = {

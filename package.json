@@ -26,5 +26,8 @@
     "postcss": "^8.5.16",
     "tailwindcss": "^4.3.2",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5"
   }
 }
