@@ -542,6 +542,7 @@ function pdfImageBuffer(source) {
 
 function pdfCellText(value, currency, isMoney) {
   if (value && typeof value === "object") return "";
+  if (isMoney && (value === "" || value === null || value === undefined)) return "";
   return isMoney ? pdfMoney(value, currency) : String(value ?? "");
 }
 
@@ -626,26 +627,31 @@ function drawPdfTable(doc, section, currency) {
   const tableWidth = widths.reduce((total, width) => total + width, 0);
   const scale = Math.min(1, (doc.page.width - PDF_MARGIN * 2) / tableWidth);
   const scaled = widths.map((width) => width * scale);
-  const headerHeight = 24;
+  const headerHeight = 30;
+  const tableDrawWidth = scaled.reduce((a, b) => a + b, 0);
+  const drawHeader = () => {
+    const headerY = doc.y;
+    doc.rect(x, headerY, tableDrawWidth, headerHeight).fill(PDFKIT_COLORS.red);
+    let headerX = x;
+    section.columns.forEach((label, index) => {
+      doc.fillColor("#FFFFFF").fontSize(6.8).text(label, headerX + 4, headerY + 7, { width: scaled[index] - 8, align: "center" });
+      headerX += scaled[index];
+    });
+    doc.y = headerY + headerHeight;
+  };
   ensurePdfPageSpace(doc, headerHeight + 24);
-  let y = doc.y;
-  doc.rect(x, y, scaled.reduce((a, b) => a + b, 0), headerHeight).fill(PDFKIT_COLORS.red);
-  let currentX = x;
-  section.columns.forEach((label, index) => {
-    doc.fillColor("#FFFFFF").fontSize(7.2).text(label, currentX + 4, y + 8, { width: scaled[index] - 8, align: "center" });
-    currentX += scaled[index];
-  });
-  y += headerHeight;
-  doc.y = y;
+  drawHeader();
   for (const row of section.rows || []) {
     const values = row._keys.map((key, index) => ({ key, value: row[key], money: section.moneyCols?.includes(index) }));
-    const textHeight = Math.max(...values.map(({ value, money }) => doc.heightOfString(pdfCellText(value, section.currencySymbol || currency, money), { width: scaled[values.indexOf(values.find((v) => v.value === value))] || 40 })), 20);
+    const textHeight = Math.max(...values.map(({ value, money }, index) => doc.heightOfString(pdfCellText(value, section.currencySymbol || currency, money), { width: scaled[index] - 8 })), 20);
     const hasImage = values.some(({ value }) => value?.type === "image" && value.source);
     const rowHeight = Math.max(row._summary ? 28 : 24, hasImage ? 42 : textHeight + 12);
+    const pageCountBefore = doc.bufferedPageRange().count;
     ensurePdfPageSpace(doc, rowHeight + 8);
-    y = doc.y;
-    currentX = x;
-    if (row._summary) doc.rect(x, y, scaled.reduce((a, b) => a + b, 0), rowHeight).fill(PDFKIT_COLORS.softRed);
+    if (doc.bufferedPageRange().count > pageCountBefore) drawHeader();
+    const y = doc.y;
+    let currentX = x;
+    if (row._summary) doc.rect(x, y, tableDrawWidth, rowHeight).fill(PDFKIT_COLORS.softRed);
     values.forEach(({ key, value, money }, index) => {
       const cellWidth = scaled[index];
       doc.rect(currentX, y, cellWidth, rowHeight).stroke(PDFKIT_COLORS.border);
@@ -673,7 +679,7 @@ function drawPdfTable(doc, section, currency) {
 
 async function renderStructuredPdfWithJs(document, options = {}) {
   try {
-    const doc = new PDFDocument({ size: "LETTER", margin: PDF_MARGIN, bufferPages: true, autoFirstPage: true });
+    const doc = new PDFDocument({ size: "LETTER", layout: document.layout || "portrait", margin: PDF_MARGIN, bufferPages: true, autoFirstPage: true });
     const chunks = [];
     doc.on("data", (chunk) => chunks.push(chunk));
     const done = new Promise((resolve, reject) => {
@@ -682,9 +688,11 @@ async function renderStructuredPdfWithJs(document, options = {}) {
     });
     doc.registerFont("main", existsSync(PDF_FONT_PATH) ? PDF_FONT_PATH : "Helvetica");
     doc.font("main");
+    const titleX = document.layout === "landscape" ? 360 : 270;
+    const titleWidth = doc.page.width - titleX - PDF_MARGIN;
     if (options.logoPath && existsSync(options.logoPath)) doc.image(options.logoPath, 42, 40, { fit: [155, 70] });
-    doc.fillColor(PDFKIT_COLORS.text).fontSize(24).text(document.title || "ORDER DOCUMENT", 270, 54, { width: 285, align: "center" });
-    doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(document.subtitle || "", 270, 98, { width: 285, align: "left" });
+    doc.fillColor(PDFKIT_COLORS.text).fontSize(24).text(document.title || "ORDER DOCUMENT", titleX, 54, { width: titleWidth, align: "center" });
+    doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(document.subtitle || "", titleX, 98, { width: titleWidth, align: "left" });
     doc.y = 145;
     if (document.info) drawBoxedColumns(doc, document.info.leftTitle, document.info.leftRows || [], document.info.rightTitle, document.info.rightRows || []);
     drawKeyValueGrid(doc, document.terms || [], document.currencySymbol || "$");
@@ -1060,17 +1068,53 @@ function salesProductRows(db, salesOrder) {
 }
 
 function purchaseProductRows(db, purchaseOrder) {
-  return poItems(db, purchaseOrder.id).map((item, index) => ({
-    _keys: ["no", "logoImage", "productName", "model", "specification", "quantity", "purchaseUnitPrice", "purchaseTotal"],
-    no: index + 1,
-    logoImage: { type: "image", source: item.logoImageData || "" },
+  const items = poItems(db, purchaseOrder.id);
+  const rows = items.map((item) => ({
+    _keys: ["productName", "model", "specification", "qtyLabel", "quantity", "freightWeight", "purchaseUnitPrice", "purchaseTotal"],
     productName: item.productName,
     model: item.model,
     specification: item.specification || "-",
+    qtyLabel: item.qtyLabel || `${item.quantity || 0} pcs`,
     quantity: item.quantity,
+    freightWeight: item.freightWeight || "-",
     purchaseUnitPrice: item.purchaseUnitPrice,
     purchaseTotal: item.purchaseTotal
   }));
+  rows.push({
+    _keys: ["productName", "model", "specification", "qtyLabel", "quantity", "freightWeight", "purchaseUnitPrice", "purchaseTotal"],
+    _summary: true,
+    productName: "Total",
+    model: "",
+    specification: "",
+    qtyLabel: "",
+    quantity: sum(items, "quantity"),
+    freightWeight: purchaseTotalFreightWeight(items),
+    purchaseUnitPrice: "",
+    purchaseTotal: sum(items, "purchaseTotal")
+  });
+  return rows;
+}
+
+function purchaseLogoRows(db, purchaseOrder) {
+  return poItems(db, purchaseOrder.id)
+    .filter((item) => item.logoImageData || item.logoRequirement)
+    .map((item, index) => ({
+      _keys: ["no", "logoImage", "productName", "model", "logoRequirement"],
+      no: index + 1,
+      logoImage: { type: "image", source: item.logoImageData || "" },
+      productName: item.productName,
+      model: item.model,
+      logoRequirement: item.logoRequirement || "-"
+    }));
+}
+
+function purchaseTotalFreightWeight(items) {
+  const parsed = items.map((item) => String(item.freightWeight || "").match(/^([\d,.]+)\s*([a-zA-Z\u4e00-\u9fa5]+)$/)).filter(Boolean);
+  if (!parsed.length || parsed.length !== items.length) return "";
+  const unit = parsed[0][2];
+  if (!parsed.every((match) => match[2] === unit)) return "";
+  const total = parsed.reduce((sumValue, match) => sumValue + Number(match[1].replace(/,/g, "")), 0);
+  return `${total.toLocaleString("en-US")} ${unit}`;
 }
 
 function salesTotalsRows(db, salesOrder) {
@@ -1224,7 +1268,8 @@ function pdfDocumentPayload(db, type, idValue, user) {
       poNo: po.poNo,
       title: "PURCHASE ORDER",
       subtitle: `PO Reference: ${po.poNo}\nPO Date: ${po.orderDate}\nRelated Sales Order: ${relatedSalesOrder?.orderNo || "Direct PO"}`,
-      currencySymbol: "CNY ",
+      layout: "landscape",
+      currencySymbol: "¥",
       info: {
         leftTitle: "Supplier / 采购商",
         leftRows: buyerRows(),
@@ -1250,27 +1295,26 @@ function pdfDocumentPayload(db, type, idValue, user) {
       summary: [
         { label: "Total Items / 产品行数", value: String(rows.length) },
         { label: "Total Qty / 总数量", value: String(totalQty) },
-        { label: "Purchase Amount / 采购金额", value: `CNY ${total.toFixed(2)}` },
+        { label: "Purchase Amount / 采购金额", value: `¥${total.toFixed(2)}` },
         { label: "QC Status / 质检状态", value: statusText(po.qcStatus) },
         { label: "Factory Delivery / 工厂交期", value: po.factoryDeliveryDate || "-" }
       ],
       sections: [
         {
-          title: "Product Totals / 产品汇总",
-          kind: "table",
-          columns: ["#", "Product / 产品", "SKU", "Qty", "Amount"],
-          widths: [9, 75, 22, 20, 42],
-          moneyCols: [4],
-          rows: purchaseTotalsRows(db, po)
-        },
-        {
           title: "Item Details / 采购产品明细",
           kind: "table",
-          columns: ["#", "Logo", "Product / 产品", "SKU", "Spec / 规格", "Qty", "Unit Price", "Amount"],
-          widths: [7, 20, 40, 17, 38, 12, 17, 17],
+          columns: ["Product / 产品", "SKU / 型号", "Spec / 规格", "Qty / 数量", "Pieces / 件数", "Freight Weight / 计费重量", "Unit Price / 单价", "Product Amount / 金额"],
+          widths: [50, 20, 25, 22, 18, 30, 26, 35],
           moneyCols: [6, 7],
           rows: purchaseProductRows(db, po)
         },
+        ...(purchaseLogoRows(db, po).length ? [{
+          title: "Custom Logo / 定制 Logo",
+          kind: "table",
+          columns: ["#", "Logo", "Product / 产品", "SKU", "Logo Requirement / 标志要求"],
+          widths: [9, 25, 58, 24, 52],
+          rows: purchaseLogoRows(db, po)
+        }] : []),
         {
           title: "Amount Summary / 金额汇总",
           kind: "kv",
@@ -1884,6 +1928,8 @@ async function handleApi(req, res, db, user, url) {
           item.purchaseTotal = Number((quantity * unitPrice).toFixed(2));
           if (!isFactory(user)) {
             if ("specification" in raw) item.specification = raw.specification;
+            if ("qtyLabel" in raw) item.qtyLabel = raw.qtyLabel;
+            if ("freightWeight" in raw) item.freightWeight = raw.freightWeight;
             if ("logoRequirement" in raw) item.logoRequirement = raw.logoRequirement;
             if ("logoImageData" in raw) item.logoImageData = raw.logoImageData;
             if ("logoImageName" in raw) item.logoImageName = raw.logoImageName;
@@ -2018,7 +2064,7 @@ async function handleApi(req, res, db, user, url) {
       const fileName = type === "pi"
         ? downloadFileName("PI", document.orderNo)
         : type === "po"
-          ? downloadFileName("PO", document.poNo)
+          ? downloadFileName(document.poNo)
           : downloadFileName("QC", document.reportNo, document.poNo || document.id);
       res.writeHead(200, { "content-type": "application/pdf", "content-disposition": `attachment; filename="${fileName}.pdf"` });
       return res.end(pdf);
@@ -2076,7 +2122,9 @@ function poItem(orderId, raw) {
     productName: bilingualProductName(raw.productName || raw.name || "", model),
     model,
     specification: raw.specification || "",
+    qtyLabel: raw.qtyLabel || raw.orderQty || `${quantity || 0} pcs`,
     quantity,
+    freightWeight: raw.freightWeight || raw.weight || "",
     purchaseUnitPrice: unit,
     purchaseTotal: Number(raw.purchaseTotal ?? quantity * unit),
     logoRequirement: raw.logoRequirement || "",

@@ -624,7 +624,7 @@ async function renderNewPurchaseOrder() {
         <h2 style="margin:0">采购产品明细</h2>
         <button class="btn" type="button" id="addPoItem">添加一行</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>产品名称（中文 / English）</th><th>产品 Logo</th><th>数量</th><th>工厂采购单价（人民币）</th><th>规格</th><th>标志要求</th><th>颜色</th><th>包装</th><th>操作</th></tr></thead><tbody id="poItemsBody">
+      <div class="table-wrap"><table><thead><tr><th>Product / 产品</th><th>SKU / 型号</th><th>Spec / 规格</th><th>Qty / 数量</th><th>Pieces / 件数</th><th>Freight Weight / 计费重量</th><th>Unit Price / 单价（人民币）</th><th>Product Amount / 金额（人民币）</th><th>产品 Logo</th><th>包装</th><th>操作</th></tr></thead><tbody id="poItemsBody">
         ${poItemRowTemplate(products.items)}
       </tbody></table></div>
       <div style="height:14px"></div>
@@ -632,13 +632,25 @@ async function renderNewPurchaseOrder() {
     </form>`);
   bindGoButtons();
   const poItemsBody = $("#poItemsBody");
+  const recalcNewPoRow = (row) => {
+    const quantity = Number($(".po-quantity", row)?.value || 0);
+    const price = Number($(".po-purchase-price", row)?.value || 0);
+    const total = $(".po-line-total", row);
+    if (total) total.textContent = moneyCny(quantity * price);
+  };
   const bindPoItemRows = () => {
     $$(".po-product", poItemsBody).forEach((select) => {
       select.onchange = () => {
         const row = select.closest("tr");
         const purchaseInput = $(".po-purchase-price", row);
         purchaseInput.value = select.selectedOptions[0].dataset.purchase || purchaseInput.value;
+        const modelInput = $(".po-model", row);
+        if (modelInput) modelInput.value = select.selectedOptions[0].dataset.model || "";
+        recalcNewPoRow(row);
       };
+    });
+    $$(".po-quantity, .po-purchase-price", poItemsBody).forEach((input) => {
+      input.oninput = () => recalcNewPoRow(input.closest("tr"));
     });
     $$(".remove-po-item", poItemsBody).forEach((button) => {
       button.onclick = () => {
@@ -668,13 +680,15 @@ async function renderNewPurchaseOrder() {
         productName: opt.dataset.name,
         model: opt.dataset.model,
         specification: $(".po-specification", row).value,
+        qtyLabel: $(".po-qty-label", row).value,
         quantity,
+        freightWeight: $(".po-freight-weight", row).value,
         purchaseUnitPrice,
         purchaseTotal: quantity * purchaseUnitPrice,
         logoRequirement: $(".po-logo", row).value,
         logoImageData: logoFile ? await fileToDataUrl(logoFile, { maxRawBytes: 2_000_000 }) : "",
         logoImageName: logoFile?.name || "",
-        colorRequirement: $(".po-color", row).value,
+        colorRequirement: "",
         packagingRequirement: $(".po-packaging", row).value
       };
     }));
@@ -703,12 +717,14 @@ async function renderNewPurchaseOrder() {
 function poItemRowTemplate(products) {
   return `<tr>
     <td><select class="select po-product">${products.map((p) => `<option value="${p.id}" data-name="${p.name}" data-model="${p.model}" data-purchase="${p.defaultPurchasePrice}">${p.name} / ${p.model}</option>`).join("")}</select></td>
-    <td><input class="input po-logo-file" type="file" accept="image/*"></td>
-    <td><input class="input po-quantity" type="number" min="1" value="500"></td>
-    <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
+    <td><input class="input po-model" value="${products[0]?.model || ""}" disabled></td>
     <td><input class="input po-specification" value="按确认样生产"></td>
-    <td><input class="input po-logo" value="按确认稿"></td>
-    <td><input class="input po-color" value="按订单要求"></td>
+    <td><input class="input po-qty-label" value="1 pc"></td>
+    <td><input class="input po-quantity" type="number" min="1" value="1"></td>
+    <td><input class="input po-freight-weight" value=""></td>
+    <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
+    <td class="po-line-total">${moneyCny(products[0]?.defaultPurchasePrice || 1)}</td>
+    <td><input class="input po-logo-file" type="file" accept="image/*"><input class="input po-logo" type="hidden" value="按确认稿"></td>
     <td><input class="input po-packaging" value="出口纸箱"></td>
     <td><button class="btn small danger remove-po-item" type="button">删除</button></td>
   </tr>`;
@@ -832,19 +848,21 @@ function purchaseOrderView(po, factoryMode) {
 function purchaseItemsEditTable(items = [], factoryMode = false) {
   if (!items.length) return `<p class="muted">暂无数据</p>`;
   return `<div class="table-wrap"><table>
-    <thead><tr><th>产品名称（中文 / English）</th><th>型号</th><th>产品 Logo</th><th>数量</th><th>工厂采购单价（CNY）</th><th>工厂采购总价（CNY）</th><th>标志要求</th><th>包装</th></tr></thead>
+    <thead><tr><th>Product / 产品</th><th>SKU / 型号</th><th>Spec / 规格</th><th>Qty / 数量</th><th>Pieces / 件数</th><th>Freight Weight / 计费重量</th><th>Unit Price / 单价（CNY）</th><th>Product Amount / 金额（CNY）</th><th>产品 Logo</th><th>包装</th></tr></thead>
     <tbody>
       ${items.map((item) => `<tr data-po-item-id="${item.id}" data-po-qty="${Number(item.quantity || 0)}">
         <td>${displayValue(item.productName)}</td>
         <td>${displayValue(item.model)}</td>
+        <td>${factoryMode ? displayValue(item.specification) : `<input class="input po-edit-specification" value="${escapeAttr(item.specification || "")}">`}</td>
+        <td>${factoryMode ? displayValue(item.qtyLabel || `${Number(item.quantity || 0)} pcs`) : `<input class="input po-edit-qty-label" value="${escapeAttr(item.qtyLabel || `${Number(item.quantity || 0)} pcs`)}">`}</td>
+        <td>${factoryMode ? `<strong>${Number(item.quantity || 0)}</strong>` : `<input class="input po-edit-qty" type="number" min="0" step="1" value="${Number(item.quantity || 0)}">`}</td>
+        <td>${factoryMode ? displayValue(item.freightWeight) : `<input class="input po-edit-freight-weight" value="${escapeAttr(item.freightWeight || "")}">`}</td>
+        <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
+        <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
         <td>
           ${item.logoImageData ? `<img class="product-logo-thumb" src="${item.logoImageData}" alt="产品 Logo">` : `<span class="muted">未上传</span>`}
           ${factoryMode ? "" : `<input class="input po-edit-logo-file" type="file" accept="image/*">`}
         </td>
-        <td>${factoryMode ? `<strong>${Number(item.quantity || 0)}</strong>` : `<input class="input po-edit-qty" type="number" min="0" step="1" value="${Number(item.quantity || 0)}">`}</td>
-        <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
-        <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
-        <td>${displayValue(item.logoRequirement)}</td>
         <td>${displayValue(item.packagingRequirement)}</td>
       </tr>`).join("")}
     </tbody>
@@ -870,6 +888,11 @@ function bindPoActions(po, factoryMode) {
         quantity: readPoQuantity(row),
         purchaseUnitPrice: Number($(".po-edit-price", row)?.value || 0)
       };
+      if (!factoryMode) {
+        item.specification = $(".po-edit-specification", row)?.value || "";
+        item.qtyLabel = $(".po-edit-qty-label", row)?.value || "";
+        item.freightWeight = $(".po-edit-freight-weight", row)?.value || "";
+      }
       if (logoFile) {
         item.logoImageData = await fileToDataUrl(logoFile, { maxRawBytes: 2_000_000 });
         item.logoImageName = logoFile.name;
@@ -1163,6 +1186,14 @@ function simpleTable(rows = [], keys = [], labels = keys, cell = (row, key) => d
 
 function field(label, value) {
   return `<div class="field"><span>${label}</span><strong>${displayValue(value)}</strong></div>`;
+}
+
+function escapeAttr(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function tag(label, status = "") {
