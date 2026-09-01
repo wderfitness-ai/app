@@ -32,6 +32,15 @@ const ROLE = {
   FACTORY: "Factory"
 };
 
+const BOOTSTRAP_ADMIN = {
+  id: "user-wderfitness-admin",
+  name: "WdeFitness",
+  email: process.env.BOOTSTRAP_ADMIN_EMAIL || "wderfitness@gmail.com",
+  password: process.env.BOOTSTRAP_ADMIN_PASSWORD || "",
+  role: ROLE.ADMIN,
+  approvalStatus: "approved"
+};
+
 const ORDER_STATUS = [
   "Inquiry Received",
   "Quoted",
@@ -122,7 +131,9 @@ function emptyDb() {
 
 async function readDb() {
   await ensureDataFile();
-  return JSON.parse(await readFile(DATA_FILE, "utf8"));
+  const db = JSON.parse(await readFile(DATA_FILE, "utf8"));
+  if (ensureBootstrapAdmin(db)) await writeDb(db);
+  return db;
 }
 
 async function writeDb(db) {
@@ -136,6 +147,27 @@ function id(prefix) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function ensureBootstrapAdmin(db) {
+  if (!BOOTSTRAP_ADMIN.password) return false;
+  const existing = db.users.find((user) => String(user.email || "").toLowerCase() === BOOTSTRAP_ADMIN.email);
+  if (existing) {
+    let changed = false;
+    for (const [key, value] of Object.entries(BOOTSTRAP_ADMIN)) {
+      if (existing[key] !== value) {
+        existing[key] = value;
+        changed = true;
+      }
+    }
+    if (!existing.approvedAt) {
+      existing.approvedAt = now();
+      changed = true;
+    }
+    return changed;
+  }
+  db.users.push({ ...BOOTSTRAP_ADMIN, createdAt: now(), approvedAt: now() });
+  return true;
 }
 
 function parseCookies(req) {
