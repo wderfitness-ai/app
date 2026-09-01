@@ -3,11 +3,12 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { PDFParse } from "pdf-parse";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const DATA_FILE = process.env.DATA_FILE || (process.env.VERCEL ? path.join("/tmp", "trade-order-database.json") : path.join(__dirname, "data", "database.json"));
 const PUBLIC_DIR = path.join(__dirname, "public");
 const UPLOAD_DIR = process.env.UPLOAD_DIR || (process.env.VERCEL ? path.join("/tmp", "trade-order-uploads") : path.join(__dirname, "uploads"));
@@ -497,13 +498,9 @@ function structuredPdf(title, document, options = {}) {
 }
 
 async function extractPdfText(contentBase64) {
-  const parser = new PDFParse({ data: Buffer.from(contentBase64, "base64") });
-  try {
-    const result = await parser.getText();
-    return { pages: result.total || result.pages?.length || 0, text: result.text || "" };
-  } finally {
-    await parser.destroy();
-  }
+  const pdfParse = require("pdf-parse/lib/pdf-parse.js");
+  const result = await pdfParse(Buffer.from(contentBase64, "base64"));
+  return { pages: result.numpages || result.numrender || 0, text: result.text || "" };
 }
 
 const PRODUCT_ZH = {
@@ -592,17 +589,57 @@ function parseImportedSalesOrderPdf(textContent) {
 
   const itemStart = lines.findIndex((line) => line === "Item Details");
   const notesStart = lines.findIndex((line, index) => index > itemStart && line === "Notes");
-  const itemLines = itemStart >= 0 ? lines.slice(itemStart + 2, notesStart > itemStart ? notesStart : undefined) : [];
+  const rawItemLines = itemStart >= 0 ? lines.slice(itemStart + 1, notesStart > itemStart ? notesStart : undefined) : [];
+  const itemLines = [];
+  let itemBuffer = "";
+  for (const line of rawItemLines) {
+    if (line.startsWith("ProductSKU") || line.startsWith("Product SKU") || line.startsWith("Total ")) continue;
+    itemBuffer = `${itemBuffer}${itemBuffer ? " " : ""}${line}`.trim();
+    if (/\$[\d,.]+\s*$/.test(itemBuffer)) {
+      itemLines.push(itemBuffer);
+      itemBuffer = "";
+    }
+  }
   const items = [];
   const itemPattern = /^(.+?)\s+([A-Z]{2,}-\d{3})\s+(.+?)\s+(\d+(?:\.\d+)?)\s+(pc|pcs|pair|pairs|set|sets|kg|lb)\s+([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)\s+lb\s+\$([\d,.]+)\/([A-Z]+)\s+\$([\d,.]+)$/i;
   const compactItemPattern = /^(.+?)\s+([A-Z]{2,}-\d{3})\s+(\d+(?:\.\d+)?)\s+(pc|pcs|pair|pairs|set|sets|kg|lb)\s+([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)\s+lb\s+\$([\d,.]+)\/([A-Z]+)\s+\$([\d,.]+)$/i;
   for (const line of itemLines) {
     if (line.startsWith("Product SKU") || line.startsWith("Total ")) continue;
-    const match = line.match(itemPattern);
-    const compactMatch = match ? null : line.match(compactItemPattern);
-    if (!match && !compactMatch) continue;
-    const [, productName, model, spec, orderQty, orderUnit, pieces, weightLb, unitPrice, priceUnit, amount] = match
-      || [null, compactMatch[1], compactMatch[2], "-", compactMatch[3], compactMatch[4], compactMatch[5], compactMatch[6], compactMatch[7], compactMatch[8], compactMatch[9]];
+    const compactLine = line.replace(/\s+/g, " ");
+    const match = compactLine.match(itemPattern);
+    const compactMatch = match ? null : compactLine.match(compactItemPattern);
+    const knownModel = Object.keys(PRODUCT_NAME_BY_MODEL).sort((a, b) => b.length - a.length).find((sku) => compactLine.includes(sku));
+    const fusedMatch = match || compactMatch || !knownModel ? null : compactLine.match(new RegExp(`^(.+?)${knownModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(.+?)\\$([\\d,.]+)\\/([A-Z]+)\\$([\\d,.]+)$`, "i"));
+    let productName;
+    let model;
+    let spec;
+    let orderQty;
+    let orderUnit;
+    let pieces;
+    let weightLb;
+    let unitPrice;
+    let priceUnit;
+    let amount;
+    if (match || compactMatch) {
+      [, productName, model, spec, orderQty, orderUnit, pieces, weightLb, unitPrice, priceUnit, amount] = match
+        || [null, compactMatch[1], compactMatch[2], "-", compactMatch[3], compactMatch[4], compactMatch[5], compactMatch[6], compactMatch[7], compactMatch[8], compactMatch[9]];
+    } else if (fusedMatch) {
+      [, productName, spec, unitPrice, priceUnit, amount] = fusedMatch;
+      model = knownModel;
+      const qtyMatch = spec.match(/(\d+(?:\.\d+)?)\s*(pc|pcs|pair|pairs|set|sets|kg|lb)(\d+)\s*lb\s*$/i);
+      if (!qtyMatch) continue;
+      orderQty = qtyMatch[1];
+      orderUnit = qtyMatch[2];
+      pieces = qtyMatch[3].slice(0, 1);
+      weightLb = qtyMatch[3].slice(1) || "0";
+      spec = spec.slice(0, qtyMatch.index).trim() || "-";
+      if (!["lb", "kg"].includes(orderUnit.toLowerCase()) && /^\d{2,}$/.test(orderQty)) {
+        spec = `${spec === "-" ? "" : `${spec} `}${orderQty.slice(0, -1)}`.trim() || "-";
+        orderQty = orderQty.slice(-1);
+      }
+    } else {
+      continue;
+    }
     const quantity = Number(String(pieces).replace(/,/g, ""));
     const salesTotal = moneyNumber(amount);
     items.push({
@@ -1700,7 +1737,7 @@ async function appHandler(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const db = await readDb();
     const user = await getUser(req, db);
-    if (url.pathname.startsWith("/api/")) return handleApi(req, res, db, user, url);
+    if (url.pathname.startsWith("/api/")) return await handleApi(req, res, db, user, url);
     return serveStatic(req, res, url);
   } catch (error) {
     console.error(error);
