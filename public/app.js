@@ -430,7 +430,7 @@ async function loadSalesOrders() {
   $("#listBody").innerHTML = `
     ${simpleTable(data.items, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate", "actions"], ["订单号", "客户", "状态", "付款", "预计交期", "操作"], (row, key) => {
       if (key === "statusZh") return tag(row.statusZh, row.status);
-      if (key === "actions") return `<button class="btn small" data-go="/admin/orders/${row.id}">快速查看</button>${state.user.role === "Admin" ? ` <button class="btn small danger" data-delete-sales-order="${row.id}" data-order-no="${row.orderNo}">删除</button>` : ""}`;
+      if (key === "actions") return `<button class="btn small" data-go="/admin/orders/${row.id}">快速查看</button>${state.user.role === "Admin" ? ` <button class="btn small danger" data-delete-sales-order="${row.id}" data-order-no="${row.orderNo}">归档</button>` : ""}`;
       return displayValue(row[key]);
     })}
     ${pager(data, loadSalesOrders)}`;
@@ -452,7 +452,7 @@ async function loadPurchaseOrders() {
     ${simpleTable(data.items, ["poNo", "factoryName", "productionStatus", "qcStatus", "factoryPaymentStatus", "factoryDeliveryDate", "purchaseTotalCny", "actions"], ["采购单号", "工厂", "生产状态", "质检", "工厂付款", "工厂交期", "采购金额（CNY）", "操作"], (row, key) => {
       if (["productionStatus", "qcStatus", "factoryPaymentStatus"].includes(key)) return tag(row[key], row[key]);
       if (key === "purchaseTotalCny") return moneyCny(row[key]);
-      if (key === "actions") return `<button class="btn small" data-po="${row.id}">快速查看</button>${state.user.role === "Admin" ? ` <button class="btn small danger" data-delete-purchase-order="${row.id}" data-order-no="${row.poNo}">删除</button>` : ""}`;
+      if (key === "actions") return `<button class="btn small" data-po="${row.id}">快速查看</button>${state.user.role === "Admin" ? ` <button class="btn small danger" data-delete-purchase-order="${row.id}" data-order-no="${row.poNo}">归档</button>` : ""}`;
       return displayValue(row[key]);
     })}
     ${pager(data, loadPurchaseOrders)}`;
@@ -693,7 +693,7 @@ async function renderSalesOrderDetail(id) {
         <div class="filters">
           <select class="select" id="statusSelect">${state.orderStatuses.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
           <button class="btn primary" id="updateStatus">更新状态</button>
-          ${state.user.role === "Admin" ? `<button class="btn danger" id="deleteOrder">删除订单</button>` : ""}
+          ${state.user.role === "Admin" ? `<button class="btn danger" id="deleteOrder">归档订单</button>` : ""}
         </div>
       </div>
       <div class="detail-grid">
@@ -765,7 +765,7 @@ function purchaseOrderView(po, factoryMode) {
         <div class="filters">
           <select class="select" id="poStatus">${state.orderStatuses.map((s) => `<option value="${s}" ${s === po.productionStatus ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
           <button class="btn primary" id="savePoStatus">保存交期/状态/单价</button>
-          ${state.user.role === "Admin" && !factoryMode ? `<button class="btn danger" id="deletePurchaseOrder">删除采购单</button>` : ""}
+          ${state.user.role === "Admin" && !factoryMode ? `<button class="btn danger" id="deletePurchaseOrder">归档采购单</button>` : ""}
         </div>
       </div>
       <div class="detail-grid">
@@ -855,7 +855,7 @@ function bindPoActions(po, factoryMode) {
 
 async function deleteSalesOrder(id, orderNo, onDone = loadSalesOrders) {
   if (state.user.role !== "Admin") return;
-  const ok = confirm(`确定删除客户订单 ${orderNo}？关联采购单、产品明细、付款记录、文件记录、QC 和时间线也会从系统记录中删除。`);
+  const ok = confirm(`确定归档客户订单 ${orderNo}？系统会从常规列表隐藏它，但完整保留订单、采购单、产品明细、付款记录、文件记录、QC 和时间线。`);
   if (!ok) return;
   await api(`/api/sales-orders/${id}?confirm=DELETE`, { method: "DELETE" });
   await onDone();
@@ -863,7 +863,7 @@ async function deleteSalesOrder(id, orderNo, onDone = loadSalesOrders) {
 
 async function deletePurchaseOrder(id, poNo, onDone = loadPurchaseOrders) {
   if (state.user.role !== "Admin") return;
-  const ok = confirm(`确定删除采购单 ${poNo}？该采购单的产品明细、付款记录、文件记录、QC 和时间线也会从系统记录中删除。`);
+  const ok = confirm(`确定归档采购单 ${poNo}？系统会从常规列表隐藏它，但完整保留采购单、产品明细、付款记录、文件记录、QC 和时间线。`);
   if (!ok) return;
   await api(`/api/purchase-orders/${id}?confirm=DELETE`, { method: "DELETE" });
   await onDone();

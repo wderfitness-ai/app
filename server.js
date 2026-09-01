@@ -380,25 +380,38 @@ function visiblePurchaseOrder(db, po, user) {
   return base;
 }
 
-function deletePurchaseOrderRecords(db, purchaseOrderId) {
-  const qcIds = db.qc_reports.filter((qc) => qc.purchaseOrderId === purchaseOrderId).map((qc) => qc.id);
-  db.purchase_orders = db.purchase_orders.filter((po) => po.id !== purchaseOrderId);
-  db.purchase_order_items = db.purchase_order_items.filter((item) => item.purchaseOrderId !== purchaseOrderId);
-  db.qc_reports = db.qc_reports.filter((qc) => qc.purchaseOrderId !== purchaseOrderId);
-  db.qc_report_items = db.qc_report_items.filter((item) => !qcIds.includes(item.qcReportId));
-  db.payments = db.payments.filter((payment) => payment.purchaseOrderId !== purchaseOrderId);
-  db.order_files = db.order_files.filter((file) => file.purchaseOrderId !== purchaseOrderId);
-  db.order_timeline = db.order_timeline.filter((item) => !(item.orderType === "purchase_order" && item.orderId === purchaseOrderId));
+function isDeleted(record) {
+  return Boolean(record?.deletedAt);
 }
 
-function deleteSalesOrderRecords(db, salesOrderId) {
-  const purchaseOrderIds = db.purchase_orders.filter((po) => po.salesOrderId === salesOrderId).map((po) => po.id);
-  for (const purchaseOrderId of purchaseOrderIds) deletePurchaseOrderRecords(db, purchaseOrderId);
-  db.sales_orders = db.sales_orders.filter((order) => order.id !== salesOrderId);
-  db.sales_order_items = db.sales_order_items.filter((item) => item.salesOrderId !== salesOrderId);
-  db.payments = db.payments.filter((payment) => payment.salesOrderId !== salesOrderId);
-  db.order_files = db.order_files.filter((file) => file.salesOrderId !== salesOrderId);
-  db.order_timeline = db.order_timeline.filter((item) => !(item.orderType === "sales_order" && item.orderId === salesOrderId));
+function markPurchaseOrderDeleted(db, purchaseOrderId, user, note = "管理员归档采购单") {
+  const po = db.purchase_orders.find((item) => item.id === purchaseOrderId);
+  if (!po || isDeleted(po)) return po;
+  const oldStatus = po.productionStatus;
+  po.deletedAt = now();
+  po.deletedBy = user.id;
+  po.deletedByName = user.name;
+  po.deletedReason = note;
+  po.productionStatus = "Cancelled";
+  po.updatedAt = now();
+  addTimeline(db, po.id, "purchase_order", user, oldStatus, po.productionStatus, `${note}，系统保留采购单、明细、文件、QC、付款和时间线记录`);
+  return po;
+}
+
+function markSalesOrderDeleted(db, salesOrderId, user) {
+  const order = db.sales_orders.find((item) => item.id === salesOrderId);
+  if (!order || isDeleted(order)) return order;
+  const relatedPurchaseOrders = db.purchase_orders.filter((po) => po.salesOrderId === salesOrderId);
+  for (const po of relatedPurchaseOrders) markPurchaseOrderDeleted(db, po.id, user, "客户订单删除后关联归档采购单");
+  const oldStatus = order.status;
+  order.deletedAt = now();
+  order.deletedBy = user.id;
+  order.deletedByName = user.name;
+  order.deletedReason = "管理员删除客户订单";
+  order.status = "Cancelled";
+  order.updatedAt = now();
+  addTimeline(db, order.id, "sales_order", user, oldStatus, order.status, "管理员删除客户订单，系统保留订单、明细、文件、采购单、QC、付款和时间线记录");
+  return order;
 }
 
 function listQuery(url) {
@@ -434,13 +447,13 @@ function filterGeneric(items, query, keys, statusKey = "status") {
 function createReminderRecords(db) {
   const today = new Date();
   const reminders = [];
-  for (const po of db.purchase_orders) {
+  for (const po of db.purchase_orders.filter((item) => !isDeleted(item))) {
     const ageDays = (today - new Date(po.orderDate)) / 86400000;
     if (po.factoryConfirmStatus !== "Confirmed" && ageDays > 2) reminders.push(rem("工厂超过2天未确认订单", "high", po.salesOrderId, po.id));
     if (po.qcStatus !== "Passed" && ["Production Inspection", "Packing Inspection", "Ready to Ship"].includes(po.productionStatus)) reminders.push(rem("质检未完成", "medium", po.salesOrderId, po.id));
     if (po.factoryPaymentStatus !== "Paid" && ["Ready to Ship", "Shipped"].includes(po.productionStatus)) reminders.push(rem("工厂尾款未付", "medium", po.salesOrderId, po.id));
   }
-  for (const so of db.sales_orders) {
+  for (const so of db.sales_orders.filter((item) => !isDeleted(item))) {
     const daysLeft = (new Date(so.expectedDeliveryDate) - today) / 86400000;
     const files = db.order_files.filter((file) => file.salesOrderId === so.id);
     if (!files.some((file) => file.fileType === "Logo File")) reminders.push(rem("标志文件未上传", "medium", so.id));
@@ -1282,8 +1295,8 @@ async function handleApi(req, res, db, user, url) {
   }
 
   if (resource === "dashboard" && method === "GET") {
-    const visibleSales = db.sales_orders.filter((so) => user.role !== ROLE.SALES || so.salesId === user.id);
-    const visiblePo = isFactory(user) ? db.purchase_orders.filter((po) => po.factoryId === user.factoryId) : db.purchase_orders;
+    const visibleSales = db.sales_orders.filter((so) => !isDeleted(so) && (user.role !== ROLE.SALES || so.salesId === user.id));
+    const visiblePo = db.purchase_orders.filter((po) => !isDeleted(po) && (!isFactory(user) || po.factoryId === user.factoryId));
     const month = new Date().toISOString().slice(0, 7);
     if (isFactory(user)) {
       const monthPo = visiblePo.filter((po) => po.orderDate.startsWith(month));
@@ -1415,7 +1428,7 @@ async function handleApi(req, res, db, user, url) {
   if (resource === "sales-orders") {
     if (method === "GET" && !resourceId) {
       const query = listQuery(url);
-      let orders = db.sales_orders;
+      let orders = db.sales_orders.filter((order) => !isDeleted(order));
       if (user.role === ROLE.SALES) orders = orders.filter((order) => order.salesId === user.id);
       if (isFactory(user)) return json(res, 403, { error: "Forbidden" });
       const visible = filterGeneric(orders.map((o) => visibleSalesOrder(db, o, user)), query, ["orderNo", "customerName", "destinationCountry"], "status");
@@ -1478,19 +1491,21 @@ async function handleApi(req, res, db, user, url) {
       if (confirm !== "DELETE") return json(res, 400, { error: "Deletion requires confirm=DELETE" });
       const before = db.sales_orders.find((o) => o.id === resourceId);
       if (!before) return json(res, 404, { error: "Not found" });
+      if (isDeleted(before)) return json(res, 200, { ok: true, archived: true });
       const relatedPurchaseOrders = db.purchase_orders.filter((po) => po.salesOrderId === resourceId);
-      deleteSalesOrderRecords(db, resourceId);
-      audit(db, user, "sales_order", resourceId, "delete", before, null);
-      audit(db, user, "sales_order", resourceId, "delete_related_records", { purchaseOrderCount: relatedPurchaseOrders.length }, null);
+      const beforeSnapshot = { ...before };
+      markSalesOrderDeleted(db, resourceId, user);
+      audit(db, user, "sales_order", resourceId, "soft_delete", beforeSnapshot, { ...before });
+      audit(db, user, "sales_order", resourceId, "preserve_related_records", { purchaseOrderCount: relatedPurchaseOrders.length }, { retained: true });
       await writeDb(db);
-      return json(res, 200, { ok: true });
+      return json(res, 200, { ok: true, archived: true });
     }
   }
 
   if (resource === "purchase-orders") {
     if (method === "GET" && !resourceId) {
       const query = listQuery(url);
-      let orders = db.purchase_orders;
+      let orders = db.purchase_orders.filter((po) => !isDeleted(po));
       if (isFactory(user)) orders = orders.filter((po) => po.factoryId === user.factoryId);
       const visible = filterGeneric(orders.map((po) => visiblePurchaseOrder(db, po, user)), query, ["poNo", "factoryName", "productionStatus"], "productionStatus");
       return json(res, 200, paginate(visible, query));
@@ -1581,10 +1596,12 @@ async function handleApi(req, res, db, user, url) {
       if (confirm !== "DELETE") return json(res, 400, { error: "Deletion requires confirm=DELETE" });
       const before = db.purchase_orders.find((o) => o.id === resourceId);
       if (!before) return json(res, 404, { error: "Not found" });
-      deletePurchaseOrderRecords(db, resourceId);
-      audit(db, user, "purchase_order", resourceId, "delete", before, null);
+      if (isDeleted(before)) return json(res, 200, { ok: true, archived: true });
+      const beforeSnapshot = { ...before };
+      markPurchaseOrderDeleted(db, resourceId, user);
+      audit(db, user, "purchase_order", resourceId, "soft_delete", beforeSnapshot, { ...before });
       await writeDb(db);
-      return json(res, 200, { ok: true });
+      return json(res, 200, { ok: true, archived: true });
     }
   }
 
@@ -1660,15 +1677,15 @@ async function handleApi(req, res, db, user, url) {
     const type = url.searchParams.get("type");
     if (type === "profit" && !canViewFinance(user)) return json(res, 403, { error: "Forbidden" });
     if (type === "sales-orders") {
-      const rows = db.sales_orders.map((so) => ({ orderNo: so.orderNo, customer: db.customers.find((c) => c.id === so.customerId)?.company || "", status: so.status, paymentStatus: so.paymentStatus, totalUsd: profitForSalesOrder(db, so).salesTotal }));
+      const rows = db.sales_orders.filter((so) => !isDeleted(so)).map((so) => ({ orderNo: so.orderNo, customer: db.customers.find((c) => c.id === so.customerId)?.company || "", status: so.status, paymentStatus: so.paymentStatus, totalUsd: profitForSalesOrder(db, so).salesTotal }));
       return text(res, 200, csv(rows), "text/csv; charset=utf-8", { "content-disposition": "attachment; filename=sales-orders.csv" });
     }
     if (type === "purchase-orders") {
-      const rows = db.purchase_orders.filter((po) => !isFactory(user) || po.factoryId === user.factoryId).map((po) => ({ poNo: po.poNo, factory: db.factories.find((f) => f.id === po.factoryId)?.name || "", productionStatus: po.productionStatus, qcStatus: po.qcStatus, factoryPaymentStatus: po.factoryPaymentStatus, purchaseTotalCny: sum(poItems(db, po.id), "purchaseTotal") }));
+      const rows = db.purchase_orders.filter((po) => !isDeleted(po) && (!isFactory(user) || po.factoryId === user.factoryId)).map((po) => ({ poNo: po.poNo, factory: db.factories.find((f) => f.id === po.factoryId)?.name || "", productionStatus: po.productionStatus, qcStatus: po.qcStatus, factoryPaymentStatus: po.factoryPaymentStatus, purchaseTotalCny: sum(poItems(db, po.id), "purchaseTotal") }));
       return text(res, 200, csv(rows), "text/csv; charset=utf-8", { "content-disposition": "attachment; filename=purchase-orders.csv" });
     }
     if (type === "profit") {
-      const rows = db.sales_orders.map((so) => {
+      const rows = db.sales_orders.filter((so) => !isDeleted(so)).map((so) => {
         const p = profitForSalesOrder(db, so);
         return { orderNo: so.orderNo, salesTotalUsd: p.salesTotal, purchaseCostCny: p.purchaseCostCny, purchaseCostUsd: p.purchaseCost, freightUsd: p.freight, otherCostUsd: p.otherCost, estimatedProfitUsd: p.estimatedProfit, profitRate: p.profitRate, exchangeRateCnyPerUsd: p.exchangeRateCnyPerUsd };
       });
