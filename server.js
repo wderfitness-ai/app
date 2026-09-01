@@ -815,6 +815,8 @@ const PRODUCT_ZH = {
   "Mens Olympic 1500lb 4 Bearing": "男士奥杆1500磅四轴承",
   "Rubber Bumper Plate": "橡胶杠铃片",
   "Cast Iron Weight Plate": "铸铁杠铃片",
+  "Rubber Hex Dumbbell": "六角橡胶哑铃",
+  "Standard 2 Tier Dumbbell Rack (10 pair)": "标准双层哑铃架（10副）",
   "Chrome Dumbbell": "电镀哑铃",
   "Cast Iron Kettlebell": "铸铁壶铃",
   "Fixed Barbell Chrome EZ": "电镀固定EZ弯杆"
@@ -827,11 +829,13 @@ const PRODUCT_NAME_BY_MODEL = {
   "CDB-12": ["棉布抽绳袋", "Cotton Drawstring Bag"],
   "PPM-150": ["便携野餐垫", "Portable Picnic Mat"],
   "DR-006": ["电镀哑铃架（20副）", "Chrome Rack (20 pair)"],
+  "DR-008": ["标准双层哑铃架（10副）", "Standard 2 Tier Dumbbell Rack (10 pair)"],
   "KR-02": ["三层壶铃架", "3 Tier Kettlebell Rack"],
   "CR-001": ["电镀卧式弯杆架", "Horizontal Curl Bar Rack Chrome"],
   "BB-005": ["男士奥杆1500磅四轴承", "Mens Olympic 1500lb 4 Bearing"],
   "PL-002": ["橡胶杠铃片", "Rubber Bumper Plate"],
   "PL-001": ["铸铁杠铃片", "Cast Iron Weight Plate"],
+  "DB-006": ["六角橡胶哑铃", "Rubber Hex Dumbbell"],
   "DB-001": ["电镀哑铃", "Chrome Dumbbell"],
   "KB-037": ["铸铁壶铃", "Cast Iron Kettlebell"],
   "CB-003": ["电镀固定EZ弯杆", "Fixed Barbell Chrome EZ"],
@@ -879,12 +883,12 @@ function normalizePdfDate(value) {
 
 function normalizeImportedOrderNo(value = "") {
   const textValue = String(value || "").trim();
-  const prefixed = textValue.match(/(?:ORD|SO|PO|Q)-(\d{8})-(\d{3})/i);
-  if (prefixed) return `SO-${prefixed[1]}-${prefixed[2]}`;
-  const fullDate = textValue.match(/(\d{8})[-_](\d{3})/);
-  if (fullDate) return `SO-${fullDate[1]}-${fullDate[2]}`;
-  const shortDate = textValue.match(/(\d{2})(\d{2})(\d{2})[-_](\d{3})/);
-  if (shortDate) return `SO-20${shortDate[1]}${shortDate[2]}${shortDate[3]}-${shortDate[4]}`;
+  const prefixed = textValue.match(/(?:ORD|SO|PO|Q)-(\d{8})-(\d{1,3})/i);
+  if (prefixed) return `SO-${prefixed[1]}-${prefixed[2].padStart(3, "0")}`;
+  const fullDate = textValue.match(/(\d{8})[-_](\d{1,3})/);
+  if (fullDate) return `SO-${fullDate[1]}-${fullDate[2].padStart(3, "0")}`;
+  const shortDate = textValue.match(/(\d{2})(\d{2})(\d{2})[-_](\d{1,3})/);
+  if (shortDate) return `SO-20${shortDate[1]}${shortDate[2]}${shortDate[3]}-${shortDate[4].padStart(3, "0")}`;
   return "";
 }
 
@@ -901,7 +905,7 @@ function addDays(dateValue, days) {
 function parseImportedSalesOrderPdf(textContent) {
   const textValue = String(textContent || "").replace(/\r/g, "");
   const lines = textValue.split("\n").map((line) => line.trim()).filter(Boolean);
-  const rawQuoteRef = textValue.match(/Quote Reference:\s*((?:ORD|SO|PO|Q)-\d{8}-\d{3})/i)?.[1] || "";
+  const rawQuoteRef = textValue.match(/(?:Quote|Order) Reference:\s*((?:ORD|SO|PO|Q)-\d{8}-\d{1,3})/i)?.[1] || "";
   const quoteRef = normalizeImportedOrderNo(rawQuoteRef);
   const quoteDate = normalizePdfDate(textValue.match(/Quote Date:\s*([0-9/-]+)/i)?.[1]);
   const deliveryTerm = (textValue.match(/Trade term:\s*([A-Z]+)/i)?.[1] || "FOB").toUpperCase();
@@ -948,7 +952,8 @@ function parseImportedSalesOrderPdf(textContent) {
     const compactLine = line.replace(/\s+/g, " ");
     const match = compactLine.match(itemPattern);
     const compactMatch = match ? null : compactLine.match(compactItemPattern);
-    const knownModel = Object.keys(PRODUCT_NAME_BY_MODEL).sort((a, b) => b.length - a.length).find((sku) => compactLine.includes(sku));
+    const detectedModel = compactLine.match(/[A-Z]{2,}-\d{3}/)?.[0] || "";
+    const knownModel = Object.keys(PRODUCT_NAME_BY_MODEL).sort((a, b) => b.length - a.length).find((sku) => compactLine.includes(sku)) || detectedModel;
     const fusedMatch = match || compactMatch || !knownModel ? null : compactLine.match(new RegExp(`^(.+?)${knownModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(.+?)\\$([\\d,.]+)\\/([A-Z]+)\\$([\\d,.]+)$`, "i"));
     let productName;
     let model;
