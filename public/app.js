@@ -637,10 +637,10 @@ async function renderNewPurchaseOrder() {
   bindGoButtons();
   const poItemsBody = $("#poItemsBody");
   let newPoBulkLogo = null;
-  const recalcNewPoRow = (row) => {
+  const recalcNewPoRow = (row, options = {}) => {
     const price = Number($(".po-purchase-price", row)?.value || 0);
     const total = $(".po-line-total", row);
-    updateFreightWeightCell(row, ".po-specification", ".po-quantity", ".po-freight-weight");
+    updateFreightWeightCell(row, ".po-specification", ".po-quantity", ".po-freight-weight", options);
     if (total) total.textContent = moneyCny(readFreightWeightAmount($(".po-freight-weight", row)?.value) * price);
   };
   const bindPoItemRows = () => {
@@ -654,8 +654,19 @@ async function renderNewPurchaseOrder() {
         recalcNewPoRow(row);
       };
     });
-    $$(".po-specification, .po-quantity, .po-purchase-price", poItemsBody).forEach((input) => {
+    $$(".po-specification, .po-quantity", poItemsBody).forEach((input) => {
+      input.oninput = () => recalcNewPoRow(input.closest("tr"), { forceAuto: true });
+    });
+    $$(".po-purchase-price", poItemsBody).forEach((input) => {
       input.oninput = () => recalcNewPoRow(input.closest("tr"));
+    });
+    $$(".po-freight-weight", poItemsBody).forEach((input) => {
+      input.oninput = () => {
+        const row = input.closest("tr");
+        row.dataset.manualFreightWeight = "1";
+        row.dataset.freightWeight = input.value;
+        recalcNewPoRow(row);
+      };
     });
     $$(".po-logo-file", poItemsBody).forEach((input) => {
       input.onchange = async () => {
@@ -703,7 +714,7 @@ async function renderNewPurchaseOrder() {
       const opt = productSelect.selectedOptions[0];
       const quantity = Number($(".po-quantity", row).value || 0);
       const purchaseUnitPrice = Number($(".po-purchase-price", row).value || 0);
-      const freightWeight = calculateFreightWeight($(".po-specification", row).value, quantity);
+      const freightWeight = ($(".po-freight-weight", row).value || "").trim() || calculateFreightWeight($(".po-specification", row).value, quantity);
       return {
         productId: productSelect.value,
         productName: opt.dataset.name,
@@ -750,7 +761,7 @@ function poItemRowTemplate(products) {
     <td><input class="input po-specification" value="按确认样生产"></td>
     <td><input class="input po-qty-label" value="1 pc"></td>
     <td><input class="input po-quantity" type="number" min="1" value="1"></td>
-    <td><input class="input po-freight-weight" value="" readonly title="根据规格和件数自动核算"></td>
+    <td><input class="input po-freight-weight" value="" placeholder="例如 200 lb"></td>
     <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
     <td class="po-line-total">${moneyCny(products[0]?.defaultPurchasePrice || 1)}</td>
     <td class="po-logo-cell"><span class="muted po-logo-empty">未上传</span><input class="input po-logo-file" type="file" accept="image/*"><input class="input po-logo" type="hidden" value="按确认稿"></td>
@@ -889,7 +900,7 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
         <td>${factoryMode ? displayValue(item.specification) : `<input class="input po-edit-specification" value="${escapeAttr(item.specification || "")}">`}</td>
         <td>${factoryMode ? displayValue(item.qtyLabel || `${Number(item.quantity || 0)} pcs`) : `<input class="input po-edit-qty-label" value="${escapeAttr(item.qtyLabel || `${Number(item.quantity || 0)} pcs`)}">`}</td>
         <td>${factoryMode ? `<strong>${Number(item.quantity || 0)}</strong>` : `<input class="input po-edit-qty" type="number" min="0" step="1" value="${Number(item.quantity || 0)}">`}</td>
-        <td>${factoryMode ? displayValue(item.freightWeight) : `<input class="input po-edit-freight-weight" value="${escapeAttr(item.freightWeight || "")}" readonly title="根据规格和件数自动核算">`}</td>
+        <td><input class="input po-edit-freight-weight" value="${escapeAttr(item.freightWeight || "")}" placeholder="例如 200 lb"></td>
         <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
         <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
         <td class="po-logo-cell">
@@ -1038,16 +1049,23 @@ function bindPoActions(po, factoryMode) {
     if ($("#purchaseFinanceDeposit")) $("#purchaseFinanceDeposit").textContent = moneyCny(deposit);
     if ($("#purchaseFinanceBalance")) $("#purchaseFinanceBalance").textContent = moneyCny(balance);
   };
-  const recalcPoTotals = () => {
+  const recalcPoTotals = (options = {}) => {
     $$("[data-po-item-id]").forEach((row) => {
       const price = Number($(".po-edit-price", row)?.value || 0);
       const target = $(".po-edit-total", row);
-      updateFreightWeightCell(row, ".po-edit-specification", ".po-edit-qty", ".po-edit-freight-weight");
+      updateFreightWeightCell(row, ".po-edit-specification", ".po-edit-qty", ".po-edit-freight-weight", options);
       if (target) target.textContent = moneyCny(readPoRowFreightWeightAmount(row) * price);
     });
     updateFinanceSummary();
   };
-  $$(".po-edit-specification, .po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
+  $$(".po-edit-specification, .po-edit-qty").forEach((input) => input.addEventListener("input", () => recalcPoTotals({ forceAuto: true })));
+  $$(".po-edit-price").forEach((input) => input.addEventListener("input", () => recalcPoTotals()));
+  $$(".po-edit-freight-weight").forEach((input) => input.addEventListener("input", () => {
+    const row = input.closest("tr");
+    row.dataset.manualFreightWeight = "1";
+    row.dataset.freightWeight = input.value;
+    recalcPoTotals();
+  }));
   recalcPoTotals();
   $(".bulk-edit-po-logo-file")?.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
@@ -1080,9 +1098,9 @@ function bindPoActions(po, factoryMode) {
         if (!factoryMode) {
           item.specification = $(".po-edit-specification", row)?.value || "";
           item.qtyLabel = $(".po-edit-qty-label", row)?.value || "";
-          item.freightWeight = calculateFreightWeight(item.specification, item.quantity);
+          item.freightWeight = ($(".po-edit-freight-weight", row)?.value || "").trim() || calculateFreightWeight(item.specification, item.quantity);
         } else {
-          item.freightWeight = row.dataset.freightWeight || "";
+          item.freightWeight = ($(".po-edit-freight-weight", row)?.value || "").trim() || row.dataset.freightWeight || "";
         }
         if (row.dataset.logoImageData) {
           item.logoImageData = row.dataset.logoImageData;
@@ -1519,9 +1537,13 @@ function readPoRowFreightWeightAmount(row) {
   return readFreightWeightAmount($(".po-edit-freight-weight", row)?.value || row.dataset.freightWeight || "");
 }
 
-function updateFreightWeightCell(row, specSelector, qtySelector, targetSelector) {
+function updateFreightWeightCell(row, specSelector, qtySelector, targetSelector, options = {}) {
   const target = $(targetSelector, row);
   if (!target) return;
+  if (row.dataset.manualFreightWeight === "1" || (!options.forceAuto && target.value)) {
+    row.dataset.freightWeight = target.value;
+    return;
+  }
   const freightWeight = calculateFreightWeight($(specSelector, row)?.value, $(qtySelector, row)?.value);
   target.value = freightWeight;
   row.dataset.freightWeight = freightWeight;

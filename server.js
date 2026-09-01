@@ -1997,10 +1997,11 @@ async function handleApi(req, res, db, user, url) {
           const unitPrice = Number(raw.purchaseUnitPrice ?? item.purchaseUnitPrice ?? 0);
           if (!isFactory(user)) item.quantity = quantity;
           item.purchaseUnitPrice = unitPrice;
+          if ("freightWeight" in raw) item.freightWeight = String(raw.freightWeight || "").trim();
           if (!isFactory(user)) {
             if ("specification" in raw) item.specification = raw.specification;
             if ("qtyLabel" in raw) item.qtyLabel = raw.qtyLabel;
-            item.freightWeight = calculateFreightWeight({ ...item, ...raw, quantity });
+            if (!("freightWeight" in raw)) item.freightWeight = calculateFreightWeight({ ...item, ...raw, quantity });
             if ("logoRequirement" in raw) item.logoRequirement = raw.logoRequirement;
             if ("logoImageData" in raw) item.logoImageData = raw.logoImageData;
             if ("logoImageName" in raw) item.logoImageName = raw.logoImageName;
@@ -2227,7 +2228,7 @@ function poItem(orderId, raw) {
   const quantity = Number(raw.quantity || 0);
   const unit = Number(raw.purchaseUnitPrice ?? raw.defaultPurchasePrice ?? raw.factoryPurchasePrice ?? 0);
   const model = raw.model || "";
-  const freightWeight = calculateFreightWeight(raw);
+  const freightWeight = String(raw.freightWeight || "").trim() || calculateFreightWeight(raw);
   return {
     id: id("poi"),
     purchaseOrderId: orderId,
