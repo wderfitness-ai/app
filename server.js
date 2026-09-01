@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { get as blobGet, put as blobPut } from "@vercel/blob";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -21,6 +22,8 @@ const PORT = Number(process.env.PORT || 3000);
 const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
 const SESSION_SECRET = process.env.SESSION_SECRET || process.env.BOOTSTRAP_ADMIN_PASSWORD || "local-development-session-secret";
 const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 18_000_000);
+const BLOB_DB_PATH = process.env.BLOB_DB_PATH || "data/trade-order-database.json";
+const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -132,6 +135,12 @@ function emptyDb() {
 }
 
 async function readDb() {
+  if (USE_BLOB_DB) {
+    const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false });
+    const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
+    if (!stored || ensureBootstrapAdmin(db)) await writeDb(db);
+    return db;
+  }
   await ensureDataFile();
   const db = JSON.parse(await readFile(DATA_FILE, "utf8"));
   if (ensureBootstrapAdmin(db)) await writeDb(db);
@@ -139,6 +148,15 @@ async function readDb() {
 }
 
 async function writeDb(db) {
+  if (USE_BLOB_DB) {
+    await blobPut(BLOB_DB_PATH, JSON.stringify(db, null, 2), {
+      access: "private",
+      allowOverwrite: true,
+      contentType: "application/json",
+      cacheControlMaxAge: 60
+    });
+    return;
+  }
   await mkdir(path.dirname(DATA_FILE), { recursive: true });
   await writeFile(DATA_FILE, JSON.stringify(db, null, 2));
 }
@@ -1169,7 +1187,7 @@ async function handleApi(req, res, db, user, url) {
     const body = await bodyJson(req);
     const email = String(body.email || "").trim().toLowerCase();
     const found = db.users.find((u) => String(u.email || "").toLowerCase() === email && u.password === body.password);
-    if (!found) return json(res, 401, { error: "Invalid email or password" });
+    if (!found) return json(res, 401, { error: "邮箱或密码错误；如果刚注册，请确认注册已提交成功，并等待管理员审核。" });
     if (!isApprovedUser(found)) return json(res, 403, { error: found.approvalStatus === "rejected" ? "账号审核未通过，请联系管理员" : "账号正在等待管理员审核" });
     const token = signSessionToken(found.id);
     return json(res, 200, { user: publicUser(found) }, { "set-cookie": `session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` });
@@ -1182,9 +1200,9 @@ async function handleApi(req, res, db, user, url) {
     const password = String(body.password || "");
     const allowedRoles = [ROLE.SALES, ROLE.FACTORY];
     const role = allowedRoles.includes(body.role) ? body.role : ROLE.SALES;
-    if (!name || !email || !password) return json(res, 400, { error: "Name, email and password are required" });
-    if (password.length < 6) return json(res, 400, { error: "Password must be at least 6 characters" });
-    if (db.users.some((u) => u.email.toLowerCase() === email)) return json(res, 409, { error: "Email already registered" });
+    if (!name || !email || !password) return json(res, 400, { error: "请填写用户名、注册邮箱和注册密码" });
+    if (password.length < 6) return json(res, 400, { error: "注册密码至少需要 6 位" });
+    if (db.users.some((u) => u.email.toLowerCase() === email)) return json(res, 409, { error: "该邮箱已经注册，请等待审核或直接登录" });
     let factoryId = "";
     let businessLicenseFileName = "";
     let businessLicensePath = "";
