@@ -720,6 +720,7 @@ async function renderNewPurchaseOrder() {
     const fd = new FormData(event.currentTarget);
     const body = Object.fromEntries(fd);
     if (!body.salesOrderId) delete body.salesOrderId;
+    const logoPayloadRefs = new Map();
     body.items = await Promise.all($$("#poItemsBody tr").map(async (row) => {
       const productSelect = $(".po-product", row);
       const opt = productSelect.selectedOptions[0];
@@ -737,11 +738,21 @@ async function renderNewPurchaseOrder() {
         purchaseUnitPrice,
         purchaseTotal: readFreightWeightAmount(freightWeight) * purchaseUnitPrice,
         logoRequirement: $(".po-logo", row).value,
-        logoImageData: row.dataset.logoImageData || "",
-        logoImageName: row.dataset.logoImageName || "",
         colorRequirement: "",
         packagingRequirement: $(".po-packaging", row).value
       };
+      if (row.dataset.logoImageData) {
+        const logoKey = row.dataset.logoImageData;
+        const existingRef = logoPayloadRefs.get(logoKey);
+        if (existingRef) {
+          item.logoImageCopyFrom = existingRef;
+        } else {
+          item.logoImageData = row.dataset.logoImageData;
+          item.logoImageName = row.dataset.logoImageName || "product-logo";
+          logoPayloadRefs.set(logoKey, item.productId || item.model || item.productName);
+        }
+      }
+      return item;
     }));
     body.items = body.items.filter((item) => item.productId && item.quantity > 0);
     if (!body.items.length) return alert("请至少填写一条有效的采购产品明细");
@@ -1100,6 +1111,7 @@ function bindPoActions(po, factoryMode) {
   });
   $("#savePoStatus").addEventListener("click", async () => {
     try {
+      const logoPayloadRefs = new Map();
       const items = await Promise.all($$("[data-po-item-id]").map(async (row) => {
         const item = {
           id: row.dataset.poItemId,
@@ -1113,9 +1125,16 @@ function bindPoActions(po, factoryMode) {
         } else {
           item.freightWeight = ($(".po-edit-freight-weight", row)?.value || "").trim() || row.dataset.freightWeight || "";
         }
-        if (row.dataset.logoImageData) {
-          item.logoImageData = row.dataset.logoImageData;
-          item.logoImageName = row.dataset.logoImageName || "product-logo";
+        if (row.dataset.logoImageDirty === "1" && row.dataset.logoImageData) {
+          const logoKey = row.dataset.logoImageData;
+          const existingRef = logoPayloadRefs.get(logoKey);
+          if (existingRef) {
+            item.logoImageCopyFrom = existingRef;
+          } else {
+            item.logoImageData = row.dataset.logoImageData;
+            item.logoImageName = row.dataset.logoImageName || "product-logo";
+            logoPayloadRefs.set(logoKey, item.id);
+          }
         }
         return item;
       }));
@@ -1218,7 +1237,7 @@ function toBase64(file) {
 async function readPoLogo(file) {
   return {
     name: file.name,
-    data: await fileToDataUrl(file, { maxRawBytes: 2_000_000 })
+    data: await fileToDataUrl(file, { maxRawBytes: 350_000 })
   };
 }
 
@@ -1226,6 +1245,7 @@ function applyPoLogoToRows(rows, logo) {
   rows.filter(Boolean).forEach((row) => {
     row.dataset.logoImageData = logo.data;
     row.dataset.logoImageName = logo.name;
+    row.dataset.logoImageDirty = "1";
     const cell = $(".po-logo-cell", row);
     if (!cell) return;
     const existing = $(".product-logo-thumb", cell);
@@ -1248,7 +1268,7 @@ async function fileToDataUrl(file, options = {}) {
   const maxRawBytes = options.maxRawBytes || 2_000_000;
   if (!file.type.startsWith("image/")) throw new Error("产品 Logo 只支持 JPG、PNG、WebP 等图片格式");
   if (file.size > maxRawBytes) {
-    return compressImageToDataUrl(file, 900, 0.78);
+    return compressImageToDataUrl(file, 420, 0.68);
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

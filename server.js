@@ -1999,7 +1999,24 @@ async function handleApi(req, res, db, user, url) {
         updatedAt: now()
       };
       db.purchase_orders.push(po);
-      for (const raw of sourceItems) db.purchase_order_items.push(poItem(po.id, raw));
+      const logoPayloadRefs = new Map();
+      for (const raw of sourceItems) {
+        const item = poItem(po.id, raw);
+        if (raw.logoImageData) {
+          logoPayloadRefs.set(raw.productId || raw.model || raw.productName || raw.name || item.id, {
+            data: item.logoImageData,
+            name: item.logoImageName
+          });
+        }
+        if (raw.logoImageCopyFrom) {
+          const sourceLogo = logoPayloadRefs.get(raw.logoImageCopyFrom);
+          if (sourceLogo) {
+            item.logoImageData = sourceLogo.data;
+            item.logoImageName = sourceLogo.name;
+          }
+        }
+        db.purchase_order_items.push(item);
+      }
       if (so) {
         const oldStatus = so.status;
         so.status = "Factory Order Placed";
@@ -2032,6 +2049,7 @@ async function handleApi(req, res, db, user, url) {
       if ("factoryPaymentStatus" in body && !canEditPurchasePayment(user)) return json(res, 403, { error: "只有管理员和销售可以修改采购单付款状态" });
       for (const key of allowedKeys) if (key in body) po[key] = body[key];
       if (Array.isArray(body.items) && (isFactory(user) || [ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE].includes(user.role))) {
+        const logoPayloadRefs = new Map();
         for (const raw of body.items) {
           const item = db.purchase_order_items.find((entry) => entry.id === raw.id && entry.purchaseOrderId === po.id);
           if (!item) continue;
@@ -2045,8 +2063,18 @@ async function handleApi(req, res, db, user, url) {
             if ("qtyLabel" in raw) item.qtyLabel = raw.qtyLabel;
             if (!("freightWeight" in raw)) item.freightWeight = calculateFreightWeight({ ...item, ...raw, quantity });
             if ("logoRequirement" in raw) item.logoRequirement = raw.logoRequirement;
-            if ("logoImageData" in raw) item.logoImageData = raw.logoImageData;
-            if ("logoImageName" in raw) item.logoImageName = raw.logoImageName;
+            if ("logoImageData" in raw) {
+              item.logoImageData = raw.logoImageData;
+              item.logoImageName = raw.logoImageName || item.logoImageName || "product-logo";
+              logoPayloadRefs.set(raw.id, { data: item.logoImageData, name: item.logoImageName });
+            }
+            if ("logoImageCopyFrom" in raw) {
+              const sourceLogo = logoPayloadRefs.get(raw.logoImageCopyFrom);
+              if (sourceLogo) {
+                item.logoImageData = sourceLogo.data;
+                item.logoImageName = sourceLogo.name;
+              }
+            }
             if ("colorRequirement" in raw) item.colorRequirement = raw.colorRequirement;
             if ("packagingRequirement" in raw) item.packagingRequirement = raw.packagingRequirement;
           }
