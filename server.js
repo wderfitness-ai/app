@@ -27,6 +27,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || process.env.BOOTSTRAP_ADMIN
 const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 18_000_000);
 const BLOB_DB_PATH = process.env.BLOB_DB_PATH || "data/trade-order-database.json";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
+const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -184,8 +185,17 @@ function id(prefix) {
   return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
 }
 
+function chinaDateParts(date = new Date()) {
+  const shifted = new Date(date.getTime() + CHINA_TIME_OFFSET_MS);
+  return {
+    date: shifted.toISOString().slice(0, 10),
+    time: shifted.toISOString().slice(11, 19)
+  };
+}
+
 function now() {
-  return new Date().toISOString();
+  const parts = chinaDateParts();
+  return `${parts.date}T${parts.time}+08:00`;
 }
 
 function ensureBootstrapAdmin(db) {
@@ -725,16 +735,16 @@ function filterGeneric(items, query, keys, statusKey = "status") {
 }
 
 function createReminderRecords(db) {
-  const today = new Date();
+  const todayDate = new Date(`${today()}T00:00:00+08:00`);
   const reminders = [];
   for (const po of db.purchase_orders.filter((item) => !isDeleted(item))) {
-    const ageDays = (today - new Date(po.orderDate)) / 86400000;
+    const ageDays = (todayDate - new Date(`${po.orderDate}T00:00:00+08:00`)) / 86400000;
     if (po.factoryConfirmStatus !== "Confirmed" && ageDays > 2) reminders.push(rem("工厂超过2天未确认订单", "high", po.salesOrderId, po.id));
     if (po.qcStatus !== "Passed" && ["Production Inspection", "Packing Inspection", "Ready to Ship"].includes(po.productionStatus)) reminders.push(rem("质检未完成", "medium", po.salesOrderId, po.id));
     if (po.factoryPaymentStatus !== "Paid" && ["Ready to Ship", "Shipped"].includes(po.productionStatus)) reminders.push(rem("工厂尾款未付", "medium", po.salesOrderId, po.id));
   }
   for (const so of db.sales_orders.filter((item) => !isDeleted(item))) {
-    const daysLeft = (new Date(so.expectedDeliveryDate) - today) / 86400000;
+    const daysLeft = (new Date(`${so.expectedDeliveryDate}T00:00:00+08:00`) - todayDate) / 86400000;
     const files = db.order_files.filter((file) => file.salesOrderId === so.id);
     if (!files.some((file) => file.fileType === "Logo File")) reminders.push(rem("标志文件未上传", "medium", so.id));
     if (!["Sample / Pre-production Confirmed", "Mass Production", "Production Inspection", "Packing Inspection", "Ready to Ship", "Shipped", "Delivered", "Closed"].includes(so.status)) reminders.push(rem("产前样未确认", "low", so.id));
@@ -1160,9 +1170,9 @@ function extractOrderNoFromFileName(fileName = "") {
 }
 
 function addDays(dateValue, days) {
-  const d = new Date(dateValue);
+  const d = new Date(`${dateValue}T00:00:00+08:00`);
   d.setDate(d.getDate() + Number(days || 30));
-  return d.toISOString().slice(0, 10);
+  return chinaDateParts(d).date;
 }
 
 function cleanImportedCustomerLine(line) {
@@ -1916,7 +1926,7 @@ async function handleApi(req, res, db, user, url) {
     const contentType = String(body.contentType || "application/octet-stream").trim();
     if (!rawFileName) return json(res, 400, { error: "缺少文件名" });
     const safeFileName = rawFileName.replace(/[^\w.\- \u4e00-\u9fa5]/g, "_");
-    const pathname = `uploads/${new Date().toISOString().slice(0, 10)}/${crypto.randomBytes(8).toString("hex")}-${safeFileName}`;
+    const pathname = `uploads/${today()}/${crypto.randomBytes(8).toString("hex")}-${safeFileName}`;
     const validUntil = Date.now() + 10 * 60 * 1000;
     const token = await issueSignedToken({
       pathname,
@@ -2009,7 +2019,7 @@ async function handleApi(req, res, db, user, url) {
   if (resource === "dashboard" && method === "GET") {
     const visibleSales = db.sales_orders.filter((so) => !isDeleted(so) && (user.role !== ROLE.SALES || so.salesId === user.id));
     const visiblePo = db.purchase_orders.filter((po) => !isDeleted(po) && (!isFactory(user) || po.factoryId === user.factoryId));
-    const month = new Date().toISOString().slice(0, 7);
+    const month = today().slice(0, 7);
     if (isFactory(user)) {
       const monthPo = visiblePo.filter((po) => po.orderDate.startsWith(month));
       const purchaseTotalCny = visiblePo.reduce((total, po) => total + sum(poItems(db, po.id), "purchaseTotal"), 0);
@@ -2568,13 +2578,12 @@ function publicUser(user) {
 }
 
 function today(offsetDays = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+  const d = new Date(Date.now() + Number(offsetDays || 0) * 86400000);
+  return chinaDateParts(d).date;
 }
 
 function nextNo(records, prefix) {
-  const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const date = today().replaceAll("-", "");
   const count = records.filter((item) => String(item.orderNo || item.poNo || item.reportNo || "").includes(date)).length + 1;
   return `${prefix}-${date}-${String(count).padStart(3, "0")}`;
 }

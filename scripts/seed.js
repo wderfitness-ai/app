@@ -5,13 +5,16 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const DATA_FILE = path.join(ROOT, "data", "database.json");
+const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 const today = (offset = 0) => {
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
+  const d = new Date(Date.now() + offset * 86400000 + CHINA_TIME_OFFSET_MS);
   return d.toISOString().slice(0, 10);
 };
-const now = () => new Date().toISOString();
+const now = () => {
+  const shifted = new Date(Date.now() + CHINA_TIME_OFFSET_MS);
+  return `${shifted.toISOString().slice(0, 10)}T${shifted.toISOString().slice(11, 19)}+08:00`;
+};
 
 const users = [
   { id: "user-wdefitness", name: "WdeFitness", email: "wdefitness@trade.local", password: "password123", role: "Admin", approvalStatus: "approved", approvedAt: now() },

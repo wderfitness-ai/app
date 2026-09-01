@@ -126,6 +126,8 @@ const UNIT_LABELS = {
   lb: "磅"
 };
 
+const CHINA_TIMEZONE = "Asia/Shanghai";
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -490,7 +492,7 @@ async function renderDashboard() {
       </div>
       <div class="panel">
         <h2>延期与待办提醒</h2>
-        <div class="timeline">${data.reminders.map((r) => `<div class="timeline-item"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${r.createdAt.slice(0,10)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`}</div>
+        <div class="timeline">${data.reminders.map((r) => `<div class="timeline-item"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`}</div>
       </div>
     </section>
     <section class="panel" style="margin-top:14px">
@@ -949,7 +951,7 @@ async function renderSalesOrderDetail(id) {
       </div>
       <div class="panel">
         <h2>订单时间线</h2>
-        <div class="timeline">${order.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${tl.createdAt.slice(0,16).replace("T"," ")}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
+        <div class="timeline">${order.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
       </div>
     </section>
     ${filePanel(order)}
@@ -1021,7 +1023,7 @@ function purchaseOrderView(po, factoryMode) {
       </div>
       <div class="panel">
         <h2>时间线</h2>
-        <div class="timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${tl.createdAt.slice(0,16).replace("T"," ")}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
+        <div class="timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
       </div>
     </section>
     ${filePanel(po, true)}
@@ -1664,10 +1666,43 @@ function severityLabel(level) {
   return { low: "低", medium: "中", high: "高", critical: "紧急" }[level] || level || "";
 }
 
+function formatChinaDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: CHINA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+function formatChinaDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: CHINA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 function displayValue(value) {
   if (value === null || value === undefined) return "";
   if (typeof value !== "string") return value;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value.slice(0, 16).replace("T", " ");
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return formatChinaDateTime(value);
   if (ROLE_LABELS[value]) return roleLabel(value);
   if (STATUS_LABELS[value] || state.statusZh?.[value]) return statusLabel(value);
   if (PAYMENT_TYPE_LABELS[value]) return paymentTypeLabel(value);
@@ -1741,7 +1776,7 @@ function updateFreightWeightCell(row, specSelector, qtySelector, targetSelector,
 function future(days) {
   const d = new Date();
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return formatChinaDate(d.toISOString());
 }
 
 function bindGoButtons() {
