@@ -133,6 +133,7 @@ function emptyDb() {
     qc_report_items: [],
     payments: [],
     reminders: [],
+    notifications: [],
     audit_logs: []
   };
 }
@@ -141,14 +142,28 @@ async function readDb() {
   if (USE_BLOB_DB) {
     const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false });
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
-    const changed = ensureBootstrapAdmin(db);
+    let changed = ensureDbShape(db);
+    changed = ensureBootstrapAdmin(db) || changed;
     if (!stored || changed) await writeDb(db);
     return db;
   }
   await ensureDataFile();
   const db = JSON.parse(await readFile(DATA_FILE, "utf8"));
-  if (ensureBootstrapAdmin(db)) await writeDb(db);
+  let changed = ensureDbShape(db);
+  changed = ensureBootstrapAdmin(db) || changed;
+  if (changed) await writeDb(db);
   return db;
+}
+
+function ensureDbShape(db) {
+  let changed = false;
+  for (const [key, value] of Object.entries(emptyDb())) {
+    if (!Array.isArray(db[key])) {
+      db[key] = value;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 async function writeDb(db) {
@@ -364,6 +379,178 @@ function audit(db, user, entityType, entityId, action, before, after) {
     before,
     after
   });
+}
+
+function notify(db, options = {}) {
+  const notification = {
+    id: id("ntf"),
+    title: String(options.title || "订单通知"),
+    message: String(options.message || ""),
+    entityType: options.entityType || "",
+    entityId: options.entityId || "",
+    orderNo: options.orderNo || "",
+    roles: Array.isArray(options.roles) ? options.roles : [],
+    userIds: Array.isArray(options.userIds) ? options.userIds : [],
+    factoryId: options.factoryId || "",
+    actorId: options.actor?.id || "system",
+    actorName: options.actor?.name || "System",
+    severity: options.severity || "info",
+    readBy: [],
+    createdAt: now()
+  };
+  db.notifications.unshift(notification);
+  if (db.notifications.length > 500) db.notifications.length = 500;
+  return notification;
+}
+
+function notificationVisibleFor(user, notification) {
+  if (!user || !notification) return false;
+  if (notification.userIds?.includes(user.id)) return true;
+  if (notification.roles?.includes(user.role)) {
+    if (user.role === ROLE.FACTORY && notification.factoryId && notification.factoryId !== user.factoryId) return false;
+    return true;
+  }
+  if (user.role === ROLE.FACTORY && notification.roles?.includes(ROLE.FACTORY) && notification.factoryId === user.factoryId) return true;
+  return false;
+}
+
+function visibleNotifications(db, user) {
+  return (db.notifications || [])
+    .filter((item) => notificationVisibleFor(user, item))
+    .map((item) => ({
+      ...item,
+      unread: !item.readBy?.includes(user.id)
+    }));
+}
+
+function orderNoForPurchase(db, po) {
+  return po?.poNo || db.sales_orders.find((so) => so.id === po?.salesOrderId)?.orderNo || "";
+}
+
+function notifyOrderOperation(db, user, type, payload = {}) {
+  const so = payload.salesOrder;
+  const po = payload.purchaseOrder;
+  const factory = po ? db.factories.find((item) => item.id === po.factoryId) : null;
+  const orderNo = so?.orderNo || orderNoForPurchase(db, po) || payload.orderNo || "";
+  const salesOwnerId = so?.salesId || (po ? db.sales_orders.find((item) => item.id === po.salesOrderId)?.salesId : "");
+  const shared = { actor: user, orderNo, severity: payload.severity || "info" };
+
+  if (type === "sales_created") {
+    return notify(db, {
+      ...shared,
+      title: "新客户订单",
+      message: `客户订单 ${orderNo} 已创建，请跟进后续采购、生产和付款。`,
+      entityType: "sales_order",
+      entityId: so.id,
+      roles: [ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE],
+      userIds: salesOwnerId ? [salesOwnerId] : []
+    });
+  }
+  if (type === "sales_updated") {
+    return notify(db, {
+      ...shared,
+      title: "客户订单已更新",
+      message: `客户订单 ${orderNo} 已更新，请查看订单状态、付款或交期变化。`,
+      entityType: "sales_order",
+      entityId: so.id,
+      roles: [ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE],
+      userIds: salesOwnerId ? [salesOwnerId] : []
+    });
+  }
+  if (type === "purchase_dispatched") {
+    notify(db, {
+      ...shared,
+      title: "新采购单已派发",
+      message: `采购单 ${orderNo} 已派发给 ${factory?.name || "工厂"}，请工厂确认交期并填写单价。`,
+      entityType: "purchase_order",
+      entityId: po.id,
+      roles: [ROLE.ADMIN, ROLE.MERCH],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po.factoryId
+    });
+    return notify(db, {
+      ...shared,
+      title: "收到新的采购单",
+      message: `你有新的采购单 ${orderNo}，请确认产品明细、填写人民币单价和工厂交期。`,
+      entityType: "purchase_order",
+      entityId: po.id,
+      roles: [ROLE.FACTORY],
+      factoryId: po.factoryId
+    });
+  }
+  if (type === "purchase_updated_by_factory") {
+    return notify(db, {
+      ...shared,
+      title: "工厂已更新采购单",
+      message: `工厂已更新采购单 ${orderNo} 的价格、交期或生产状态，请审核。`,
+      entityType: "purchase_order",
+      entityId: po.id,
+      roles: [ROLE.ADMIN, ROLE.MERCH],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po.factoryId
+    });
+  }
+  if (type === "purchase_updated") {
+    return notify(db, {
+      ...shared,
+      title: "采购单已更新",
+      message: `采购单 ${orderNo} 已更新，请查看最新状态。`,
+      entityType: "purchase_order",
+      entityId: po.id,
+      roles: [ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po.factoryId
+    });
+  }
+  if (type === "qc_completed") {
+    return notify(db, {
+      ...shared,
+      title: "质检已完成",
+      message: `采购单 ${orderNo} 已完成质检，结果：${statusText(payload.result)}。`,
+      entityType: "purchase_order",
+      entityId: po.id,
+      roles: [ROLE.ADMIN, ROLE.SALES, ROLE.FINANCE],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po.factoryId,
+      severity: payload.result === "Passed" ? "success" : "warning"
+    });
+  }
+  if (type === "payment_created") {
+    return notify(db, {
+      ...shared,
+      title: "付款记录已更新",
+      message: `${payload.paymentType || "付款"} 已记录，关联订单 ${orderNo || "未指定"}。`,
+      entityType: payload.entityType || "payment",
+      entityId: payload.entityId || "",
+      roles: [ROLE.ADMIN, ROLE.FINANCE],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po?.factoryId || ""
+    });
+  }
+  if (type === "file_uploaded") {
+    return notify(db, {
+      ...shared,
+      title: "订单文件已上传",
+      message: `${user?.name || "用户"} 上传了 ${payload.fileType || "附件"}，关联订单 ${orderNo || "未指定"}。`,
+      entityType: payload.entityType || "order_file",
+      entityId: payload.entityId || "",
+      roles: [ROLE.ADMIN, ROLE.MERCH],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po?.factoryId || ""
+    });
+  }
+  if (type === "order_archived") {
+    return notify(db, {
+      ...shared,
+      title: "订单已归档",
+      message: `订单 ${orderNo} 已由管理员归档，相关记录和文件已保留。`,
+      entityType: payload.entityType || "sales_order",
+      entityId: payload.entityId || "",
+      roles: [ROLE.ADMIN, ROLE.FINANCE],
+      userIds: salesOwnerId ? [salesOwnerId] : []
+    });
+  }
+  return null;
 }
 
 function addTimeline(db, orderId, orderType, user, oldStatus, newStatus, note) {
@@ -1696,6 +1883,32 @@ async function handleApi(req, res, db, user, url) {
   if (resource === "session" && method === "GET") return json(res, 200, { user: user ? publicUser(user) : null, orderStatuses: ORDER_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })) });
   if (!requireAuth(user, res)) return;
 
+  if (resource === "notifications") {
+    if (method === "GET") {
+      const items = visibleNotifications(db, user);
+      const limit = Number(url.searchParams.get("limit") || 30);
+      return json(res, 200, {
+        items: items.slice(0, limit),
+        total: items.length,
+        unread: items.filter((item) => item.unread).length
+      });
+    }
+    if (method === "PATCH") {
+      const body = await bodyJson(req);
+      const ids = body.all
+        ? visibleNotifications(db, user).map((item) => item.id)
+        : Array.isArray(body.ids) ? body.ids : resourceId ? [resourceId] : [];
+      for (const notification of db.notifications || []) {
+        if (!ids.includes(notification.id)) continue;
+        if (!notificationVisibleFor(user, notification)) continue;
+        notification.readBy = Array.isArray(notification.readBy) ? notification.readBy : [];
+        if (!notification.readBy.includes(user.id)) notification.readBy.push(user.id);
+      }
+      await writeDb(db);
+      return json(res, 200, { ok: true });
+    }
+  }
+
   if (resource === "blob-upload-url" && method === "POST") {
     const body = await bodyJson(req);
     if (!USE_BLOB_DB) return json(res, 501, { error: "当前环境未配置文件直传存储，请使用较小文件或联系管理员配置 Blob。"});
@@ -1901,6 +2114,7 @@ async function handleApi(req, res, db, user, url) {
     });
     addTimeline(db, order.id, "sales_order", user, "", order.status, `导入客户订单 PDF：${body.fileName}`);
     audit(db, user, "sales_order", order.id, "import_pdf", null, { order, quoteRef: parsed.quoteRef, itemCount: parsed.items.length });
+    notifyOrderOperation(db, user, "sales_created", { salesOrder: order });
     await writeDb(db);
     return json(res, 201, {
       order: visibleSalesOrder(db, order, user),
@@ -1977,6 +2191,7 @@ async function handleApi(req, res, db, user, url) {
       for (const raw of body.items || []) db.sales_order_items.push(salesItem(order.id, raw));
       addTimeline(db, order.id, "sales_order", user, "", order.status, "创建客户订单");
       audit(db, user, "sales_order", order.id, "create", null, order);
+      notifyOrderOperation(db, user, "sales_created", { salesOrder: order });
       await writeDb(db);
       return json(res, 201, visibleSalesOrder(db, order, user));
     }
@@ -1991,6 +2206,7 @@ async function handleApi(req, res, db, user, url) {
       Object.assign(order, allowed, { updatedAt: now() });
       if (body.status && body.status !== oldStatus) addTimeline(db, order.id, "sales_order", user, oldStatus, body.status, body.note || "订单状态更新");
       audit(db, user, "sales_order", order.id, "update", before, order);
+      notifyOrderOperation(db, user, "sales_updated", { salesOrder: order, orderNo: order.orderNo });
       await writeDb(db);
       return json(res, 200, visibleSalesOrder(db, order, user));
     }
@@ -2006,6 +2222,7 @@ async function handleApi(req, res, db, user, url) {
       markSalesOrderDeleted(db, resourceId, user);
       audit(db, user, "sales_order", resourceId, "soft_delete", beforeSnapshot, { ...before });
       audit(db, user, "sales_order", resourceId, "preserve_related_records", { purchaseOrderCount: relatedPurchaseOrders.length }, { retained: true });
+      notifyOrderOperation(db, user, "order_archived", { salesOrder: before, entityType: "sales_order", entityId: resourceId });
       await writeDb(db);
       return json(res, 200, { ok: true, archived: true });
     }
@@ -2074,6 +2291,7 @@ async function handleApi(req, res, db, user, url) {
       }
       addTimeline(db, po.id, "purchase_order", user, "", po.productionStatus, "创建工厂采购订单");
       audit(db, user, "purchase_order", po.id, "create", null, po);
+      notifyOrderOperation(db, user, "purchase_dispatched", { salesOrder: so, purchaseOrder: po });
       await writeDb(db);
       return json(res, 201, visiblePurchaseOrder(db, po, user));
     }
@@ -2134,6 +2352,10 @@ async function handleApi(req, res, db, user, url) {
       if (body.productionStatus && body.productionStatus !== oldStatus) addTimeline(db, po.id, "purchase_order", user, oldStatus, body.productionStatus, body.note || "生产状态更新");
       if (body.factoryDeliveryDate && body.factoryDeliveryDate !== oldFactoryDeliveryDate) addTimeline(db, po.id, "purchase_order", user, oldFactoryDeliveryDate, body.factoryDeliveryDate, "工厂提交/更新交期");
       audit(db, user, "purchase_order", po.id, "update", before, po);
+      notifyOrderOperation(db, user, isFactory(user) ? "purchase_updated_by_factory" : "purchase_updated", {
+        salesOrder: db.sales_orders.find((item) => item.id === po.salesOrderId),
+        purchaseOrder: po
+      });
       await writeDb(db);
       return json(res, 200, visiblePurchaseOrder(db, po, user));
     }
@@ -2147,6 +2369,12 @@ async function handleApi(req, res, db, user, url) {
       const beforeSnapshot = { ...before };
       markPurchaseOrderDeleted(db, resourceId, user);
       audit(db, user, "purchase_order", resourceId, "soft_delete", beforeSnapshot, { ...before });
+      notifyOrderOperation(db, user, "order_archived", {
+        salesOrder: db.sales_orders.find((item) => item.id === before.salesOrderId),
+        purchaseOrder: before,
+        entityType: "purchase_order",
+        entityId: resourceId
+      });
       await writeDb(db);
       return json(res, 200, { ok: true, archived: true });
     }
@@ -2167,6 +2395,11 @@ async function handleApi(req, res, db, user, url) {
       const old = po.qcStatus;
       po.qcStatus = report.result;
       addTimeline(db, po.id, "purchase_order", user, old, report.result, "完成 QC 检查");
+      notifyOrderOperation(db, user, "qc_completed", {
+        salesOrder: db.sales_orders.find((item) => item.id === po.salesOrderId),
+        purchaseOrder: po,
+        result: report.result
+      });
     }
     audit(db, user, "qc_report", report.id, "create", null, report);
     await writeDb(db);
@@ -2183,15 +2416,30 @@ async function handleApi(req, res, db, user, url) {
       const body = await bodyJson(req);
       const payment = { id: id("pay"), ...body, amount: Number(body.amount || 0), paymentDate: body.paymentDate || today(), createdAt: now() };
       db.payments.push(payment);
+      let relatedSo = null;
+      let relatedPo = null;
       if (body.salesOrderId) {
         const so = db.sales_orders.find((o) => o.id === body.salesOrderId);
-        if (so) so.paymentStatus = body.markPaid ? "Paid" : so.paymentStatus;
+        if (so) {
+          so.paymentStatus = body.markPaid ? "Paid" : so.paymentStatus;
+          relatedSo = so;
+        }
       }
       if (body.purchaseOrderId) {
         const po = db.purchase_orders.find((o) => o.id === body.purchaseOrderId);
-        if (po) po.factoryPaymentStatus = body.markPaid ? "Paid" : po.factoryPaymentStatus;
+        if (po) {
+          po.factoryPaymentStatus = body.markPaid ? "Paid" : po.factoryPaymentStatus;
+          relatedPo = po;
+          relatedSo = db.sales_orders.find((item) => item.id === po.salesOrderId) || relatedSo;
+        }
       }
       audit(db, user, "payment", payment.id, "create", null, payment);
+      notifyOrderOperation(db, user, "payment_created", {
+        salesOrder: relatedSo,
+        purchaseOrder: relatedPo,
+        paymentType: statusText(payment.type) || payment.type || "付款记录",
+        entityId: payment.id
+      });
       await writeDb(db);
       return json(res, 201, payment);
     }
@@ -2229,6 +2477,16 @@ async function handleApi(req, res, db, user, url) {
     db.order_files.push(file);
     const { contentBase64, ...fileAudit } = file;
     audit(db, user, "order_file", file.id, "create", null, fileAudit);
+    const relatedPo = file.purchaseOrderId ? db.purchase_orders.find((item) => item.id === file.purchaseOrderId) : null;
+    const relatedSo = file.salesOrderId
+      ? db.sales_orders.find((item) => item.id === file.salesOrderId)
+      : relatedPo ? db.sales_orders.find((item) => item.id === relatedPo.salesOrderId) : null;
+    notifyOrderOperation(db, user, "file_uploaded", {
+      salesOrder: relatedSo,
+      purchaseOrder: relatedPo,
+      fileType: statusText(file.fileType) || file.fileType,
+      entityId: file.id
+    });
     await writeDb(db);
     return json(res, 201, enrichOrderFile(file));
   }

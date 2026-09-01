@@ -7,11 +7,13 @@ const state = {
   statusZh: {},
   roles: [],
   factories: [],
+  notifications: { items: [], unread: 0 },
   cache: {}
 };
 
 const navAdmin = [
   ["/admin/dashboard", "首页看板"],
+  ["/admin/notifications", "通知中心"],
   ["/admin/orders", "订单总览"],
   ["/admin/orders/new", "新建客户订单"],
   ["/admin/sales-orders", "客户订单"],
@@ -28,6 +30,7 @@ const navAdmin = [
 
 const navFactory = [
   ["/factory/dashboard", "工厂看板"],
+  ["/factory/notifications", "通知中心"],
   ["/factory/orders", "我的采购订单"]
 ];
 
@@ -290,7 +293,20 @@ function shell(content) {
       <section class="main">
         <header class="topbar">
           <div><strong>${state.user.name}</strong><span class="tag blue" style="margin-left:8px">${roleLabel(state.user.role)}</span></div>
-          <button class="btn small" id="logoutBtn">退出</button>
+          <div class="topbar-actions">
+            <div class="notification-wrap">
+              <button class="btn small notification-btn" id="notificationBtn" type="button">通知 <span id="notificationBadge" class="badge hidden">0</span></button>
+              <div class="notification-menu hidden" id="notificationMenu">
+                <div class="notification-menu-head">
+                  <strong>通知中心</strong>
+                  <button class="btn small" id="markAllNotificationsRead" type="button">全部已读</button>
+                </div>
+                <div id="notificationPreview" class="notification-list"><p class="muted">加载中...</p></div>
+                <button class="btn small" id="openNotificationsPage" type="button">查看全部通知</button>
+              </div>
+            </div>
+            <button class="btn small" id="logoutBtn">退出</button>
+          </div>
         </header>
         <main class="page">${content}</main>
       </section>
@@ -304,6 +320,93 @@ function shell(content) {
     state.user = null;
     history.pushState(null, "", "/");
     renderLogin();
+  });
+  bindNotificationMenu();
+  refreshNotifications();
+}
+
+function bindNotificationMenu() {
+  $("#notificationBtn")?.addEventListener("click", async () => {
+    $("#notificationMenu")?.classList.toggle("hidden");
+    await refreshNotifications();
+  });
+  $("#markAllNotificationsRead")?.addEventListener("click", async () => {
+    await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    await refreshNotifications();
+    if (pathNow().endsWith("/notifications")) renderNotificationsPage();
+  });
+  $("#openNotificationsPage")?.addEventListener("click", () => {
+    go(state.user.role === "Factory" ? "/factory/notifications" : "/admin/notifications");
+  });
+  if (!window.__notificationOutsideClickBound) {
+    window.__notificationOutsideClickBound = true;
+    document.addEventListener("click", (event) => {
+      const wrap = $(".notification-wrap");
+      if (wrap && !wrap.contains(event.target)) $("#notificationMenu")?.classList.add("hidden");
+    });
+  }
+}
+
+async function refreshNotifications() {
+  if (!state.user) return;
+  try {
+    const data = await api("/api/notifications?limit=8");
+    state.notifications = data;
+    const badge = $("#notificationBadge");
+    if (badge) {
+      badge.textContent = data.unread;
+      badge.classList.toggle("hidden", !data.unread);
+    }
+    const preview = $("#notificationPreview");
+    if (preview) preview.innerHTML = notificationListHtml(data.items || [], true);
+    bindNotificationClicks();
+  } catch {
+    const preview = $("#notificationPreview");
+    if (preview) preview.innerHTML = `<p class="muted">通知加载失败</p>`;
+  }
+}
+
+async function renderNotificationsPage() {
+  shell(pageTitle("通知中心", "按当前账号权限显示订单相关通知。", `<button class="btn" id="readAllOnPage">全部标记已读</button>`) + `<section class="panel"><div id="notificationPageList">加载中...</div></section>`);
+  const data = await api("/api/notifications?limit=100");
+  state.notifications = data;
+  $("#notificationPageList").innerHTML = notificationListHtml(data.items || [], false);
+  $("#readAllOnPage")?.addEventListener("click", async () => {
+    await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    await renderNotificationsPage();
+  });
+  bindNotificationClicks();
+  const badge = $("#notificationBadge");
+  if (badge) {
+    badge.textContent = data.unread;
+    badge.classList.toggle("hidden", !data.unread);
+  }
+}
+
+function notificationListHtml(items = [], compact = false) {
+  if (!items.length) return `<p class="muted">暂无通知</p>`;
+  return items.map((item) => `
+    <button class="notification-item ${item.unread ? "unread" : ""}" data-notification-id="${item.id}" data-entity-type="${escapeAttr(item.entityType || "")}" data-entity-id="${escapeAttr(item.entityId || "")}">
+      <span class="notification-dot ${item.unread ? "" : "read"}"></span>
+      <span>
+        <strong>${displayValue(item.title)}</strong>
+        <em>${displayValue(item.message)}</em>
+        <small>${displayValue(item.createdAt)}${item.orderNo ? ` · 单号 ${displayValue(item.orderNo)}` : ""}</small>
+      </span>
+    </button>`).join(compact ? "" : "");
+}
+
+function bindNotificationClicks() {
+  $$("[data-notification-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.dataset.notificationId;
+      await api(`/api/notifications/${id}`, { method: "PATCH", body: JSON.stringify({ ids: [id] }) });
+      const type = button.dataset.entityType;
+      const entityId = button.dataset.entityId;
+      if (type === "sales_order" && entityId) return go(`/admin/orders/${entityId}`);
+      if (type === "purchase_order" && entityId) return go(state.user.role === "Factory" ? `/factory/orders/${entityId}` : `/admin/purchase-orders/${entityId}`);
+      await refreshNotifications();
+    });
   });
 }
 
@@ -320,11 +423,13 @@ async function render() {
   const path = pathNow();
   if (state.user.role === "Factory" && !path.startsWith("/factory")) return go("/factory/dashboard");
   if (path === "/admin/dashboard" || path === "/factory/dashboard") return renderDashboard();
+  if (path === "/admin/notifications" || path === "/factory/notifications") return renderNotificationsPage();
   if (path === "/admin/orders" || path === "/admin/sales-orders") return renderSalesOrders();
   if (path === "/admin/orders/new") return renderNewSalesOrder();
   if (path.startsWith("/admin/orders/")) return renderSalesOrderDetail(path.split("/").pop());
   if (path === "/admin/purchase-orders/new") return renderNewPurchaseOrder();
   if (path === "/admin/purchase-orders" || path === "/factory/orders") return renderPurchaseOrders();
+  if (path.startsWith("/admin/purchase-orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
   if (path.startsWith("/factory/orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
   if (path === "/admin/customers") return renderCrud("customers", "客户管理", customerFields());
   if (path === "/admin/factories") return renderCrud("factories", "工厂管理", factoryFields());

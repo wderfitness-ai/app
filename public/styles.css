@@ -181,6 +181,123 @@ a {
   backdrop-filter: blur(12px);
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.notification-wrap {
+  position: relative;
+}
+
+.notification-btn {
+  position: relative;
+}
+
+.badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--red);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.notification-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(380px, calc(100vw - 32px));
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+  z-index: 10;
+}
+
+.notification-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.notification-list {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-menu .notification-list {
+  max-height: 360px;
+  overflow: auto;
+  margin-bottom: 10px;
+}
+
+.notification-item {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: white;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notification-item:hover {
+  border-color: #a8b3c5;
+  background: #fbfdff;
+}
+
+.notification-item.unread {
+  background: #f5f9ff;
+  border-color: #b9cff8;
+}
+
+.notification-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--brand);
+  margin-top: 6px;
+}
+
+.notification-dot.read {
+  background: #cbd5e1;
+}
+
+.notification-item strong,
+.notification-item em,
+.notification-item small {
+  display: block;
+  font-style: normal;
+}
+
+.notification-item strong {
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.notification-item em {
+  color: #475569;
+  line-height: 1.5;
+}
+
+.notification-item small {
+  color: var(--muted);
+  margin-top: 5px;
+}
+
 .page {
   padding: 24px;
 }
