@@ -1107,8 +1107,9 @@ function salesProductRows(db, salesOrder) {
 function purchaseProductRows(db, purchaseOrder) {
   const items = poItems(db, purchaseOrder.id);
   const rows = items.map((item) => ({
-    _keys: ["productName", "model", "specification", "qtyLabel", "quantity", "freightWeight", "purchaseUnitPrice", "purchaseTotal"],
+    _keys: ["productName", "logoImage", "model", "specification", "qtyLabel", "quantity", "freightWeight", "purchaseUnitPrice", "purchaseTotal"],
     productName: item.productName,
+    logoImage: { type: "image", source: item.logoImageData || "" },
     model: item.model,
     specification: item.specification || "-",
     qtyLabel: item.qtyLabel || `${item.quantity || 0} pcs`,
@@ -1118,9 +1119,10 @@ function purchaseProductRows(db, purchaseOrder) {
     purchaseTotal: item.purchaseTotal
   }));
   rows.push({
-    _keys: ["productName", "model", "specification", "qtyLabel", "quantity", "freightWeight", "purchaseUnitPrice", "purchaseTotal"],
+    _keys: ["productName", "logoImage", "model", "specification", "qtyLabel", "quantity", "freightWeight", "purchaseUnitPrice", "purchaseTotal"],
     _summary: true,
     productName: "Total",
+    logoImage: "",
     model: "",
     specification: "",
     qtyLabel: "",
@@ -1130,19 +1132,6 @@ function purchaseProductRows(db, purchaseOrder) {
     purchaseTotal: sum(items, "purchaseTotal")
   });
   return rows;
-}
-
-function purchaseLogoRows(db, purchaseOrder) {
-  return poItems(db, purchaseOrder.id)
-    .filter((item) => item.logoImageData || item.logoRequirement)
-    .map((item, index) => ({
-      _keys: ["no", "logoImage", "productName", "model", "logoRequirement"],
-      no: index + 1,
-      logoImage: { type: "image", source: item.logoImageData || "" },
-      productName: item.productName,
-      model: item.model,
-      logoRequirement: item.logoRequirement || "-"
-    }));
 }
 
 function purchaseTotalFreightWeight(items) {
@@ -1341,18 +1330,11 @@ function pdfDocumentPayload(db, type, idValue, user) {
         {
           title: "Item Details / 采购产品明细",
           kind: "table",
-          columns: ["Product / 产品", "SKU / 型号", "Spec / 规格", "Qty / 数量", "Pieces / 件数", "Freight Weight / 计费重量", "Unit Price / 单价", "Product Amount / 金额"],
-          widths: [50, 20, 25, 22, 18, 30, 26, 35],
-          moneyCols: [6, 7],
+          columns: ["Product / 产品", "Logo / 标志", "SKU / 型号", "Spec / 规格", "Qty / 数量", "Pieces / 件数", "Freight Weight / 计费重量", "Unit Price / 单价", "Product Amount / 金额"],
+          widths: [46, 22, 18, 24, 20, 16, 28, 24, 30],
+          moneyCols: [7, 8],
           rows: purchaseProductRows(db, po)
-        },
-        ...(purchaseLogoRows(db, po).length ? [{
-          title: "Custom Logo / 定制 Logo",
-          kind: "table",
-          columns: ["#", "Logo", "Product / 产品", "SKU", "Logo Requirement / 标志要求"],
-          widths: [9, 25, 58, 24, 52],
-          rows: purchaseLogoRows(db, po)
-        }] : [])
+        }
       ],
       notes: [po.remark || "Factory must confirm delivery date, product details, logo/artwork and packing before mass production."]
     };
