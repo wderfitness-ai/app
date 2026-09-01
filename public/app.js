@@ -173,9 +173,9 @@ function renderLogin() {
           <button class="btn small" type="button" id="showRegister">注册</button>
         </div>
         <div id="loginFields">
-        <label>邮箱<input class="input" name="email" value="admin@trade.local" autocomplete="username"></label>
+        <label>邮箱 / 用户名<input class="input" name="email" value="wderfitness@gmail.com" autocomplete="username"></label>
         <div style="height:10px"></div>
-        <label>密码<input class="input" name="password" value="password123" type="password" autocomplete="current-password"></label>
+        <label>密码<input class="input" name="password" value="" type="password" autocomplete="current-password"></label>
         </div>
         <div id="registerFields" class="hidden">
           <label>用户名<input class="input" name="name" value="" autocomplete="name"></label>

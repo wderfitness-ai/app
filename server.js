@@ -257,6 +257,23 @@ function isApprovedUser(user) {
   return !user?.approvalStatus || user.approvalStatus === "approved";
 }
 
+function matchesLoginIdentity(user, identity) {
+  const normalized = String(identity || "").trim().toLowerCase();
+  return String(user.email || "").toLowerCase() === normalized || String(user.name || "").toLowerCase() === normalized;
+}
+
+function findLoginUser(users, identity) {
+  const normalized = String(identity || "").trim().toLowerCase();
+  return users.find((user) => String(user.email || "").toLowerCase() === normalized)
+    || users.find((user) => String(user.email || "").toLowerCase() === BOOTSTRAP_ADMIN.email && String(user.name || "").toLowerCase() === normalized)
+    || users.find((user) => String(user.name || "").toLowerCase() === normalized)
+    || null;
+}
+
+function matchesLoginPassword(user, password) {
+  return user.password === password;
+}
+
 function bodyJson(req) {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -1540,9 +1557,11 @@ async function handleApi(req, res, db, user, url) {
 
   if (resource === "login" && method === "POST") {
     const body = await bodyJson(req);
-    const email = String(body.email || "").trim().toLowerCase();
-    const found = db.users.find((u) => String(u.email || "").toLowerCase() === email && u.password === body.password);
-    if (!found) return json(res, 401, { error: "邮箱或密码错误；如果刚注册，请确认注册已提交成功，并等待管理员审核。" });
+    const identity = String(body.email || "").trim();
+    const password = String(body.password || "");
+    const found = findLoginUser(db.users, identity);
+    if (!found) return json(res, 401, { error: "账号不存在；如果刚注册，请确认注册已提交成功。" });
+    if (!matchesLoginPassword(found, password)) return json(res, 401, { error: "密码错误，请检查输入的密码。" });
     if (!isApprovedUser(found)) return json(res, 403, { error: found.approvalStatus === "rejected" ? "账号审核未通过，请联系管理员" : "账号正在等待管理员审核" });
     const token = signSessionToken(found.id);
     return json(res, 200, { user: publicUser(found) }, { "set-cookie": `session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` });
