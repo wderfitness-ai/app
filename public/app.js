@@ -88,6 +88,8 @@ const FILE_TYPE_LABELS = {
   "Product Image": "产品图片",
   "Factory Production Image": "工厂生产图片",
   "QC Image": "质检图片",
+  "QC Product Image": "质检产品照片",
+  "QC Packing Image": "质检包装照片",
   "Packing Image": "包装图片",
   "Loading Image": "装柜图片",
   "Bill of Lading": "提单",
@@ -858,6 +860,7 @@ function purchaseOrderView(po, factoryMode) {
       <div class="panel">
         <h2>质检报告</h2>
         ${simpleTable(po.qcReports || [], ["reportNo", "result", "inspectorName", "inspectionDate", "actions"], ["报告号", "结果", "检查人", "日期", "操作"], (row, key) => key === "actions" ? `<a class="btn small" href="/api/export?type=qc&id=${row.id}">导出 PDF</a>` : displayValue(row[key]))}
+        ${qcPhotoPanel(po)}
         ${factoryMode ? "" : `<button class="btn primary" id="createQc">完成质检</button>`}
       </div>
       <div class="panel">
@@ -896,6 +899,89 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
       </tr>`).join("")}
     </tbody>
   </table></div>`;
+}
+
+function qcPhotoPanel(po) {
+  const files = po.files || [];
+  const productPhotos = files.filter((file) => file.fileType === "QC Product Image");
+  const packingPhotos = files.filter((file) => file.fileType === "QC Packing Image");
+  return `
+    <div class="qc-photo-panel">
+      <div class="qc-upload-grid">
+        ${qcUploadBox("qcProductPhotoInput", "质检产品照片", "上传产品正面、侧面、细节照片")}
+        ${qcUploadBox("qcPackingPhotoInput", "质检包装照片", "上传外箱、标签、包装方式照片")}
+      </div>
+      <div class="qc-gallery-grid">
+        ${fileGallery("产品照片", productPhotos)}
+        ${fileGallery("包装照片", packingPhotos)}
+      </div>
+    </div>`;
+}
+
+function qcUploadBox(inputId, title, hint) {
+  return `<div class="qc-upload-box">
+    <strong>${title}</strong>
+    <span>${hint}</span>
+    <input class="input" id="${inputId}" type="file" accept="image/*" multiple>
+  </div>`;
+}
+
+function fileGallery(title, files = []) {
+  if (!files.length) return `<div class="qc-gallery"><h3>${title}</h3><p class="muted">暂无图片</p></div>`;
+  return `<div class="qc-gallery">
+    <h3>${title}</h3>
+    <div class="file-card-grid">
+      ${files.map((file) => fileCard(file)).join("")}
+    </div>
+  </div>`;
+}
+
+function fileCard(file) {
+  const downloadUrl = file.downloadUrl || `/api/files/${file.id}/download`;
+  const previewUrl = `${downloadUrl}?preview=1`;
+  return `<div class="file-card">
+    ${file.isImage ? `<img src="${previewUrl}" alt="${escapeAttr(file.fileName || "质检图片")}">` : `<div class="file-placeholder">文件</div>`}
+    <div class="file-meta">
+      <strong title="${escapeAttr(file.fileName || "")}">${displayValue(file.fileName)}</strong>
+      <span>${fileTypeLabel(file.fileType)} · ${displayValue(file.createdAt)}</span>
+    </div>
+    <a class="btn small" href="${downloadUrl}" download="${escapeAttr(file.fileName || "order-file")}">下载</a>
+  </div>`;
+}
+
+function renderCurrentPurchaseOrder(po, factoryMode) {
+  return factoryMode ? renderPurchaseOrderDetail(po.id) : renderPurchaseOrderModal(po.id);
+}
+
+function bindQcPhotoUploads(po, factoryMode) {
+  const uploadInput = (selector, fileType) => {
+    const input = $(selector);
+    if (!input) return;
+    input.addEventListener("change", async () => {
+      const files = [...(input.files || [])];
+      if (!files.length) return;
+      try {
+        for (const file of files) {
+          if (!file.type.startsWith("image/")) throw new Error("只能上传 JPG、PNG、WebP 等图片文件");
+          const contentBase64 = await fileToUploadBase64(file, { compressImages: true, maxRawBytes: 4_000_000 });
+          await api("/api/files", { method: "POST", body: JSON.stringify({
+            salesOrderId: "",
+            purchaseOrderId: po.id,
+            orderNo: po.poNo,
+            fileType,
+            fileName: file.name,
+            contentType: "image/jpeg",
+            contentBase64
+          }) });
+        }
+        await renderCurrentPurchaseOrder(po, factoryMode);
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+  };
+  uploadInput("#qcProductPhotoInput", "QC Product Image");
+  uploadInput("#qcPackingPhotoInput", "QC Packing Image");
 }
 
 function bindPoActions(po, factoryMode) {
@@ -965,6 +1051,7 @@ function bindPoActions(po, factoryMode) {
     await api("/api/qc", { method: "POST", body: JSON.stringify({ purchaseOrderId: po.id, result: "Passed", remark: "页面快速创建 QC：全部通过" }) });
     renderPurchaseOrderModal(po.id);
   });
+  bindQcPhotoUploads(po, factoryMode);
   $("#deletePurchaseOrder")?.addEventListener("click", async () => deletePurchaseOrder(po.id, po.poNo, () => go("/admin/purchase-orders")));
   bindFiles(po, true);
 }
@@ -995,8 +1082,8 @@ function bindPurchaseOrderDeleteButtons() {
 
 function filePanel(order, isPo = false) {
   const fileTypes = state.user.role === "Factory"
-    ? ["Factory Production Image", "QC Image", "Packing Image", "Loading Image", "Logistics File", "Other Attachment"]
-    : ["Customer Quotation", "PI", "Contract", "Logo File", "Product Image", "Factory Production Image", "QC Image", "Packing Image", "Loading Image", "Bill of Lading", "Invoice", "Logistics File", "Payment Screenshot", "Other Attachment"];
+    ? ["Factory Production Image", "QC Product Image", "QC Packing Image", "QC Image", "Packing Image", "Loading Image", "Logistics File", "Other Attachment"]
+    : ["Customer Quotation", "PI", "Contract", "Logo File", "Product Image", "Factory Production Image", "QC Product Image", "QC Packing Image", "QC Image", "Packing Image", "Loading Image", "Bill of Lading", "Invoice", "Logistics File", "Payment Screenshot", "Other Attachment"];
   return `<section class="panel" style="margin-top:14px">
     <h2>文件和图片归档</h2>
     <div class="toolbar">
@@ -1008,7 +1095,7 @@ function filePanel(order, isPo = false) {
       </div>
       <button class="btn primary" id="uploadFile">上传并按订单号归档</button>
     </div>
-    ${simpleTable(order.files || [], ["fileType", "fileName", "uploadedByName", "createdAt"], ["类型", "文件名", "上传人", "时间"])}
+    ${simpleTable(order.files || [], ["fileType", "fileName", "uploadedByName", "createdAt", "actions"], ["类型", "文件名", "上传人", "时间", "操作"], (row, key) => key === "actions" ? `<a class="btn small" href="${row.downloadUrl || `/api/files/${row.id}/download`}" download="${escapeAttr(row.fileName || "order-file")}">下载</a>` : displayValue(row[key]))}
   </section>`;
 }
 
@@ -1023,6 +1110,7 @@ function bindFiles(order, isPo = false) {
       orderNo: order.orderNo || order.poNo,
       fileType: $("#fileType").value,
       fileName: file.name,
+      contentType: file.type.startsWith("image/") ? "image/jpeg" : (file.type || "application/octet-stream"),
       contentBase64
     }) });
     isPo ? (state.user.role === "Factory" ? renderPurchaseOrderDetail(order.id) : renderPurchaseOrderModal(order.id)) : renderSalesOrderDetail(order.id);

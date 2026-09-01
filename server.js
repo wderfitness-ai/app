@@ -377,7 +377,7 @@ function visibleSalesOrder(db, order, user) {
     items: salesItems(db, order.id),
     purchaseOrders: db.purchase_orders.filter((po) => po.salesOrderId === order.id).map((po) => visiblePurchaseOrder(db, po, user)),
     timeline: db.order_timeline.filter((tl) => tl.orderId === order.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    files: db.order_files.filter((file) => file.salesOrderId === order.id)
+    files: db.order_files.filter((file) => file.salesOrderId === order.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile)
   };
   if (canViewFinance(user)) base.profit = profitForSalesOrder(db, order);
   if (user?.role === ROLE.SALES && order.salesId !== user.id) base.restricted = true;
@@ -395,7 +395,7 @@ function visiblePurchaseOrder(db, po, user) {
     items: poItems(db, po.id),
     purchaseTotalCny: sum(poItems(db, po.id), "purchaseTotal"),
     qcReports: db.qc_reports.filter((qc) => qc.purchaseOrderId === po.id),
-    files: db.order_files.filter((file) => file.purchaseOrderId === po.id),
+    files: db.order_files.filter((file) => file.purchaseOrderId === po.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile),
     timeline: db.order_timeline.filter((tl) => tl.orderId === po.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   };
   if (isFactory(user)) {
@@ -406,6 +406,25 @@ function visiblePurchaseOrder(db, po, user) {
     base.items = base.items.map(({ purchaseUnitPrice, purchaseTotal, ...item }) => item);
   }
   return base;
+}
+
+function fileBelongsToAccessibleOrder(db, file, user) {
+  if (!file) return false;
+  if (!isFactory(user)) return true;
+  if (!file.purchaseOrderId) return false;
+  const po = db.purchase_orders.find((order) => order.id === file.purchaseOrderId);
+  return Boolean(po && po.factoryId === user.factoryId);
+}
+
+function enrichOrderFile(file) {
+  const { contentBase64, path: storedPath, ...safeFile } = file;
+  const ext = path.extname(file.fileName || "").toLowerCase();
+  const imageExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
+  return {
+    ...safeFile,
+    isImage: imageExts.has(ext) || String(file.contentType || "").startsWith("image/"),
+    downloadUrl: `/api/files/${file.id}/download`
+  };
 }
 
 function isDeleted(record) {
@@ -2024,6 +2043,12 @@ async function handleApi(req, res, db, user, url) {
 
   if (resource === "files" && method === "POST") {
     const body = await bodyJson(req);
+    if (body.purchaseOrderId) {
+      const po = db.purchase_orders.find((order) => order.id === body.purchaseOrderId);
+      if (!po) return json(res, 404, { error: "Purchase order not found" });
+      if (isFactory(user) && po.factoryId !== user.factoryId) return json(res, 403, { error: "Forbidden" });
+    }
+    if (body.salesOrderId && isFactory(user)) return json(res, 403, { error: "Forbidden" });
     const orderNo = body.orderNo || "unassigned";
     const orderDir = path.join(UPLOAD_DIR, orderNo.replace(/[^a-zA-Z0-9_-]/g, "_"));
     await mkdir(orderDir, { recursive: true });
@@ -2032,11 +2057,43 @@ async function handleApi(req, res, db, user, url) {
       storedPath = path.join(orderDir, body.fileName.replace(/[^\w.\- ]/g, "_"));
       await writeFile(storedPath, Buffer.from(body.contentBase64, "base64"));
     }
-    const file = { id: id("file"), salesOrderId: body.salesOrderId || "", purchaseOrderId: body.purchaseOrderId || "", fileType: body.fileType || "Other Attachment", fileName: body.fileName || "manual-note.txt", path: storedPath, uploadedBy: user.id, uploadedByName: user.name, createdAt: now() };
+    const file = {
+      id: id("file"),
+      salesOrderId: body.salesOrderId || "",
+      purchaseOrderId: body.purchaseOrderId || "",
+      fileType: body.fileType || "Other Attachment",
+      fileName: body.fileName || "manual-note.txt",
+      contentType: body.contentType || "application/octet-stream",
+      contentBase64: body.contentBase64 || "",
+      path: storedPath,
+      uploadedBy: user.id,
+      uploadedByName: user.name,
+      createdAt: now()
+    };
     db.order_files.push(file);
-    audit(db, user, "order_file", file.id, "create", null, file);
+    const { contentBase64, ...fileAudit } = file;
+    audit(db, user, "order_file", file.id, "create", null, fileAudit);
     await writeDb(db);
-    return json(res, 201, file);
+    return json(res, 201, enrichOrderFile(file));
+  }
+
+  if (resource === "files" && method === "GET" && resourceId && action === "download") {
+    const file = db.order_files.find((item) => item.id === resourceId);
+    if (!file) return json(res, 404, { error: "Not found" });
+    if (!fileBelongsToAccessibleOrder(db, file, user)) return json(res, 403, { error: "Forbidden" });
+    let buffer = null;
+    if (file.contentBase64) {
+      buffer = Buffer.from(file.contentBase64, "base64");
+    } else if (file.path && existsSync(file.path)) {
+      buffer = await readFile(file.path);
+    }
+    if (!buffer) return json(res, 404, { error: "文件不存在或存储已失效" });
+    const disposition = url.searchParams.get("preview") === "1" ? "inline" : "attachment";
+    res.writeHead(200, {
+      "content-type": file.contentType || "application/octet-stream",
+      "content-disposition": `${disposition}; filename="${downloadFileName(file.fileName || "order-file")}"`
+    });
+    return res.end(buffer);
   }
 
   if (resource === "reminders" && method === "GET") return json(res, 200, { items: createReminderRecords(db) });
