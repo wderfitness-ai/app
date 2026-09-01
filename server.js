@@ -7,14 +7,14 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_FILE = path.join(__dirname, "data", "database.json");
+const DATA_FILE = process.env.DATA_FILE || (process.env.VERCEL ? path.join("/tmp", "trade-order-database.json") : path.join(__dirname, "data", "database.json"));
 const PUBLIC_DIR = path.join(__dirname, "public");
-const UPLOAD_DIR = path.join(__dirname, "uploads");
+const UPLOAD_DIR = process.env.UPLOAD_DIR || (process.env.VERCEL ? path.join("/tmp", "trade-order-uploads") : path.join(__dirname, "uploads"));
 const FACTORY_LICENSE_DIR = path.join(UPLOAD_DIR, "factory_licenses");
 const PDF_SCRIPT = path.join(__dirname, "scripts", "render-pdf.py");
 const PDF_EXTRACT_SCRIPT = path.join(__dirname, "scripts", "extract-order-pdf.py");
 const LOGO_PATH = path.join(PUBLIC_DIR, "assets", "wder-logo.jpg");
-const PYTHON_BIN = process.env.PYTHON_BIN || "/Users/abnerzhu/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3";
+const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 const PORT = Number(process.env.PORT || 3000);
 const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
 
@@ -1647,7 +1647,7 @@ async function serveStatic(req, res, url) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+async function appHandler(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const db = await readDb();
@@ -1658,8 +1658,13 @@ const server = http.createServer(async (req, res) => {
     console.error(error);
     json(res, 500, { error: error.message || "Internal server error" });
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`Trade order system running at http://localhost:${PORT}`);
-});
+export default appHandler;
+
+if (!process.env.VERCEL) {
+  const server = http.createServer(appHandler);
+  server.listen(PORT, () => {
+    console.log(`Trade order system running at http://localhost:${PORT}`);
+  });
+}
