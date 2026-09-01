@@ -205,6 +205,7 @@ function renderLogin() {
             <label>主营产品<input class="input" name="factoryMainProducts" placeholder="例如：箱包、五金、包装"></label>
             <div style="height:10px"></div>
             <label>营业执照照片<input class="input" type="file" name="businessLicense" id="businessLicense" accept="image/*,.pdf"></label>
+            <p class="muted" style="margin:6px 0 0">手机照片会自动压缩后上传；PDF 建议小于 4MB。</p>
           </div>
         </div>
         <div style="height:14px"></div>
@@ -236,6 +237,7 @@ function renderLogin() {
         return;
       }
       const licenseFile = $("#businessLicense")?.files?.[0];
+      const businessLicenseBase64 = licenseFile ? await fileToUploadBase64(licenseFile, { compressImages: true, maxRawBytes: 4_000_000 }) : "";
       const data = await api("/api/register", { method: "POST", body: JSON.stringify({
           name: fd.get("name"),
           email: fd.get("registerEmail"),
@@ -249,7 +251,7 @@ function renderLogin() {
           factoryAddress: fd.get("factoryAddress"),
           factoryMainProducts: fd.get("factoryMainProducts"),
           businessLicenseFileName: licenseFile?.name || "",
-          businessLicenseBase64: licenseFile ? await toBase64(licenseFile) : ""
+          businessLicenseBase64
         }) });
       alert(data.message || "注册申请已提交，请等待管理员审核");
       setMode("login");
@@ -900,7 +902,7 @@ function bindFiles(order, isPo = false) {
   $("#uploadFile")?.addEventListener("click", async () => {
     const file = $("#fileInput").files[0];
     if (!file) return alert("请选择文件");
-    const contentBase64 = await toBase64(file);
+    const contentBase64 = await fileToUploadBase64(file, { compressImages: true, maxRawBytes: 4_000_000 });
     await api("/api/files", { method: "POST", body: JSON.stringify({
       salesOrderId: isPo ? "" : order.id,
       purchaseOrderId: isPo ? order.id : "",
@@ -917,6 +919,44 @@ function toBase64(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function fileToUploadBase64(file, options = {}) {
+  const maxRawBytes = options.maxRawBytes || 4_000_000;
+  if (options.compressImages && file.type.startsWith("image/")) {
+    return compressImageToBase64(file);
+  }
+  if (file.size > maxRawBytes) {
+    throw new Error(`文件过大，请压缩到 ${Math.round(maxRawBytes / 1024 / 1024)}MB 以内后再上传。`);
+  }
+  return toBase64(file);
+}
+
+function compressImageToBase64(file, maxSide = 1600, quality = 0.74) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("图片读取失败，请重新选择文件"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("图片格式暂不支持，请改用 JPG/PNG 或压缩后再上传"));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        let dataUrl = canvas.toDataURL("image/jpeg", quality);
+        if (dataUrl.length > 3_500_000 && maxSide > 900) {
+          compressImageToBase64(file, 1100, 0.68).then(resolve).catch(reject);
+          return;
+        }
+        resolve(dataUrl.split(",")[1]);
+      };
+      img.src = String(reader.result);
+    };
     reader.readAsDataURL(file);
   });
 }

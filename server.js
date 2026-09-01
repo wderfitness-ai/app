@@ -20,6 +20,7 @@ const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 const PORT = Number(process.env.PORT || 3000);
 const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
 const SESSION_SECRET = process.env.SESSION_SECRET || process.env.BOOTSTRAP_ADMIN_PASSWORD || "local-development-session-secret";
+const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 18_000_000);
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -234,13 +235,19 @@ function isApprovedUser(user) {
 function bodyJson(req) {
   return new Promise((resolve, reject) => {
     let raw = "";
+    let tooLarge = false;
     req.on("data", (chunk) => {
+      if (tooLarge) return;
       raw += chunk;
-      if (raw.length > 15_000_000) {
-        reject(new Error("Payload too large"));
+      if (raw.length > MAX_JSON_BODY_BYTES) {
+        tooLarge = true;
+        const error = new Error("上传文件过大，请压缩图片或选择小于 4MB 的文件后再上传");
+        error.statusCode = 413;
+        reject(error);
       }
     });
     req.on("end", () => {
+      if (tooLarge) return;
       if (!raw) return resolve({});
       try {
         resolve(JSON.parse(raw));
@@ -1815,7 +1822,7 @@ async function appHandler(req, res) {
     return serveStatic(req, res, url);
   } catch (error) {
     console.error(error);
-    json(res, 500, { error: error.message || "Internal server error" });
+    json(res, error.statusCode || 500, { error: error.message || "Internal server error" });
   }
 }
 
