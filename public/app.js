@@ -1,0 +1,1173 @@
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+const state = {
+  user: null,
+  orderStatuses: [],
+  statusZh: {},
+  roles: [],
+  factories: [],
+  cache: {}
+};
+
+const navAdmin = [
+  ["/admin/dashboard", "首页看板"],
+  ["/admin/orders", "订单总览"],
+  ["/admin/orders/new", "新建客户订单"],
+  ["/admin/sales-orders", "客户订单"],
+  ["/admin/purchase-orders", "工厂采购订单"],
+  ["/admin/purchase-orders/new", "新建采购单"],
+  ["/admin/customers", "客户管理"],
+  ["/admin/factories", "工厂管理"],
+  ["/admin/products", "产品管理"],
+  ["/admin/qc", "质检管理"],
+  ["/admin/payments", "付款管理"],
+  ["/admin/reports", "报表导出"],
+  ["/admin/settings", "设置与审计"]
+];
+
+const navFactory = [
+  ["/factory/dashboard", "工厂看板"],
+  ["/factory/orders", "我的采购订单"]
+];
+
+const ROLE_LABELS = {
+  Admin: "管理员",
+  Sales: "销售",
+  Merchandiser: "跟单",
+  Finance: "财务",
+  Factory: "工厂账号"
+};
+
+const STATUS_LABELS = {
+  "Inquiry Received": "询盘中",
+  Quoted: "已报价",
+  "Customer Confirmed": "客户已确认",
+  "Deposit Received": "已收定金",
+  "Factory Order Placed": "已安排工厂",
+  "Factory Confirmed": "工厂已确认",
+  "Logo / Artwork Confirmed": "Logo或设计已确认",
+  "Sample / Pre-production Confirmed": "产前样已确认",
+  "Mass Production": "批量生产中",
+  "Production Inspection": "生产质检中",
+  "Packing Inspection": "包装质检中",
+  "Balance Payment Pending": "待收尾款",
+  "Ready to Ship": "待发货",
+  Shipped: "已发货",
+  Delivered: "已送达",
+  "After-sales": "售后处理中",
+  Closed: "订单关闭",
+  Cancelled: "已取消",
+  Pending: "待处理",
+  Confirmed: "已确认",
+  Paid: "已付清",
+  Unpaid: "未付款",
+  "Deposit Paid": "已付定金",
+  "Balance Pending": "待付尾款",
+  "Deposit Pending": "待收定金",
+  "Not Started": "未开始",
+  Passed: "通过",
+  Failed: "不通过",
+  "Need Rework": "需要返工"
+};
+
+const PAYMENT_TYPE_LABELS = {
+  "Customer Deposit": "客户定金",
+  "Customer Balance": "客户尾款",
+  "Factory Deposit": "工厂定金",
+  "Factory Balance": "工厂尾款",
+  Freight: "运费",
+  "Other Cost": "其他成本"
+};
+
+const FILE_TYPE_LABELS = {
+  "Customer Quotation": "客户报价单",
+  PI: "形式发票",
+  Contract: "合同",
+  "Logo File": "标志文件",
+  "Product Image": "产品图片",
+  "Factory Production Image": "工厂生产图片",
+  "QC Image": "质检图片",
+  "Packing Image": "包装图片",
+  "Loading Image": "装柜图片",
+  "Bill of Lading": "提单",
+  Invoice: "发票",
+  "Logistics File": "物流文件",
+  "Payment Screenshot": "付款截图",
+  "Other Attachment": "其他附件"
+};
+
+const DELIVERY_LABELS = {
+  EXW: "EXW（工厂交货）",
+  FOB: "FOB（离岸价）",
+  CIF: "CIF（成本保险运费）",
+  DDP: "DDP（完税后交货）"
+};
+
+const SOURCE_LABELS = {
+  LinkedIn: "领英",
+  Website: "官网",
+  Alibaba: "阿里巴巴",
+  WhatsApp: "WhatsApp",
+  Referral: "客户转介绍",
+  Other: "其他"
+};
+
+const UNIT_LABELS = {
+  piece: "个",
+  pair: "双",
+  set: "套",
+  kg: "千克",
+  lb: "磅"
+};
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: { "content-type": "application/json", ...(options.headers || {}) }
+  });
+  const type = res.headers.get("content-type") || "";
+  const data = type.includes("application/json") ? await res.json() : await res.text();
+  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  return data;
+}
+
+async function boot() {
+  try {
+    const session = await api("/api/session");
+    state.user = session.user;
+    state.orderStatuses = session.orderStatuses || [];
+    state.statusZh = session.statusZh || {};
+    state.roles = session.roles || [];
+    state.factories = session.factories || [];
+    render();
+  } catch {
+    renderLogin();
+  }
+}
+
+function pathNow() {
+  const path = window.location.pathname;
+  if (path === "/") return state.user?.role === "Factory" ? "/factory/dashboard" : "/admin/dashboard";
+  return path;
+}
+
+function go(path) {
+  history.pushState(null, "", path);
+  render();
+}
+
+window.addEventListener("popstate", render);
+
+function renderLogin() {
+  $("#app").innerHTML = `
+    <main class="login">
+      <form class="login-card" id="loginForm">
+        <img class="login-logo" src="/assets/wder-logo.jpg" alt="WDER Fitness Equipment">
+        <h1>工厂订单安排与跟单管理系统</h1>
+        <p>贸易公司后台第一版：订单、采购、生产、质检、付款、利润与导出。</p>
+        <div class="toolbar" style="justify-content:flex-start;margin-bottom:14px">
+          <button class="btn small primary" type="button" id="showLogin">登录</button>
+          <button class="btn small" type="button" id="showRegister">注册</button>
+        </div>
+        <div id="loginFields">
+        <label>邮箱<input class="input" name="email" value="admin@trade.local" autocomplete="username"></label>
+        <div style="height:10px"></div>
+        <label>密码<input class="input" name="password" value="password123" type="password" autocomplete="current-password"></label>
+        </div>
+        <div id="registerFields" class="hidden">
+          <label>用户名<input class="input" name="name" value="" autocomplete="name"></label>
+          <div style="height:10px"></div>
+          <label>注册邮箱<input class="input" name="registerEmail" value="" autocomplete="email"></label>
+          <div style="height:10px"></div>
+          <label>注册密码<input class="input" name="registerPassword" value="" type="password" autocomplete="new-password"></label>
+          <div style="height:10px"></div>
+          <label>申请账号类型<select class="select" name="role" id="roleSelect">
+            ${["Sales", "Factory"].map((role) => `<option value="${role}">${role === "Sales" ? "公司销售" : "工厂账号"}</option>`).join("")}
+          </select></label>
+          <div style="height:10px"></div>
+          <div id="factoryBind" class="hidden">
+            <label>绑定已有工厂<select class="select" name="factoryId">
+              <option value="">注册新工厂资料</option>
+              ${state.factories.map((factory) => `<option value="${factory.id}">${factory.name}</option>`).join("")}
+            </select></label>
+            <div style="height:10px"></div>
+            <label>工厂名称<input class="input" name="factoryName" placeholder="例如：某某制品厂"></label>
+            <div style="height:10px"></div>
+            <label>工厂联系人<input class="input" name="factoryContact" placeholder="工厂联系人"></label>
+            <div style="height:10px"></div>
+            <label>工厂联系电话<input class="input" name="factoryPhone" placeholder="手机号或座机"></label>
+            <div style="height:10px"></div>
+            <label>工厂微信<input class="input" name="factoryWechat" placeholder="微信号"></label>
+            <div style="height:10px"></div>
+            <label>工厂地址<input class="input" name="factoryAddress" placeholder="详细地址"></label>
+            <div style="height:10px"></div>
+            <label>主营产品<input class="input" name="factoryMainProducts" placeholder="例如：箱包、五金、包装"></label>
+            <div style="height:10px"></div>
+            <label>营业执照照片<input class="input" type="file" name="businessLicense" id="businessLicense" accept="image/*,.pdf"></label>
+          </div>
+        </div>
+        <div style="height:14px"></div>
+        <button class="btn primary" style="width:100%" id="authSubmit">登录</button>
+        <p class="muted" style="margin-top:14px">可用账号：admin / sales / merch / finance / factory-a，密码均为 password123。</p>
+      </form>
+    </main>`;
+  let mode = "login";
+  const setMode = (next) => {
+    mode = next;
+    $("#loginFields").classList.toggle("hidden", mode !== "login");
+    $("#registerFields").classList.toggle("hidden", mode !== "register");
+    $("#showLogin").classList.toggle("primary", mode === "login");
+    $("#showRegister").classList.toggle("primary", mode === "register");
+    $("#authSubmit").textContent = mode === "login" ? "登录" : "提交注册申请";
+  };
+  $("#showLogin").addEventListener("click", () => setMode("login"));
+  $("#showRegister").addEventListener("click", () => setMode("register"));
+  $("#roleSelect").addEventListener("change", () => {
+    $("#factoryBind").classList.toggle("hidden", $("#roleSelect").value !== "Factory");
+  });
+  $("#loginForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    try {
+      if (mode === "login") {
+        const data = await api("/api/login", { method: "POST", body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }) });
+        state.user = data.user;
+        go(state.user.role === "Factory" ? "/factory/dashboard" : "/admin/dashboard");
+        return;
+      }
+      const licenseFile = $("#businessLicense")?.files?.[0];
+      const data = await api("/api/register", { method: "POST", body: JSON.stringify({
+          name: fd.get("name"),
+          email: fd.get("registerEmail"),
+          password: fd.get("registerPassword"),
+          role: fd.get("role"),
+          factoryId: fd.get("factoryId"),
+          factoryName: fd.get("factoryName"),
+          factoryContact: fd.get("factoryContact"),
+          factoryPhone: fd.get("factoryPhone"),
+          factoryWechat: fd.get("factoryWechat"),
+          factoryAddress: fd.get("factoryAddress"),
+          factoryMainProducts: fd.get("factoryMainProducts"),
+          businessLicenseFileName: licenseFile?.name || "",
+          businessLicenseBase64: licenseFile ? await toBase64(licenseFile) : ""
+        }) });
+      alert(data.message || "注册申请已提交，请等待管理员审核");
+      setMode("login");
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+}
+
+function shell(content) {
+  const isFactory = state.user.role === "Factory";
+  const nav = isFactory ? navFactory : navAdmin;
+  $("#app").innerHTML = `
+    <div class="shell ${isFactory ? "factory-shell" : ""}">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-logo-box"><img src="/assets/wder-logo.jpg" alt="WDER Fitness Equipment"></div>
+          <div><strong>贸易跟单系统</strong><span>订单与工厂生产管理</span></div>
+        </div>
+        <div class="nav-section">${isFactory ? "工厂端" : "管理后台"}</div>
+        ${nav.map(([href, label]) => `<a class="nav-link ${pathNow() === href ? "active" : ""}" href="${href}" data-link>${label}<span>›</span></a>`).join("")}
+      </aside>
+      <section class="main">
+        <header class="topbar">
+          <div><strong>${state.user.name}</strong><span class="tag blue" style="margin-left:8px">${roleLabel(state.user.role)}</span></div>
+          <button class="btn small" id="logoutBtn">退出</button>
+        </header>
+        <main class="page">${content}</main>
+      </section>
+    </div>`;
+  $$("[data-link]").forEach((a) => a.addEventListener("click", (event) => {
+    event.preventDefault();
+    go(a.getAttribute("href"));
+  }));
+  $("#logoutBtn").addEventListener("click", async () => {
+    await api("/api/logout", { method: "POST" });
+    state.user = null;
+    history.pushState(null, "", "/");
+    renderLogin();
+  });
+}
+
+async function render() {
+  if (!state.user) {
+    const session = await api("/api/session");
+    state.user = session.user;
+    state.orderStatuses = session.orderStatuses || [];
+    state.statusZh = session.statusZh || {};
+    state.roles = session.roles || [];
+    state.factories = session.factories || [];
+    if (!state.user) return renderLogin();
+  }
+  const path = pathNow();
+  if (state.user.role === "Factory" && !path.startsWith("/factory")) return go("/factory/dashboard");
+  if (path === "/admin/dashboard" || path === "/factory/dashboard") return renderDashboard();
+  if (path === "/admin/orders" || path === "/admin/sales-orders") return renderSalesOrders();
+  if (path === "/admin/orders/new") return renderNewSalesOrder();
+  if (path.startsWith("/admin/orders/")) return renderSalesOrderDetail(path.split("/").pop());
+  if (path === "/admin/purchase-orders/new") return renderNewPurchaseOrder();
+  if (path === "/admin/purchase-orders" || path === "/factory/orders") return renderPurchaseOrders();
+  if (path.startsWith("/factory/orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
+  if (path === "/admin/customers") return renderCrud("customers", "客户管理", customerFields());
+  if (path === "/admin/factories") return renderCrud("factories", "工厂管理", factoryFields());
+  if (path === "/admin/products") return renderCrud("products", "产品管理", productFields());
+  if (path === "/admin/qc") return renderQc();
+  if (path === "/admin/payments") return renderPayments();
+  if (path === "/admin/reports") return renderReports();
+  if (path === "/admin/settings") return renderSettings();
+  return go(state.user.role === "Factory" ? "/factory/dashboard" : "/admin/dashboard");
+}
+
+async function renderDashboard() {
+  shell(pageTitle("首页看板", "订单进度、付款、质检、延期与工厂更新集中查看。") + `<div id="dashboard">加载中...</div>`);
+  const data = await api("/api/dashboard");
+  const factoryMode = data.mode === "factory" || state.user.role === "Factory";
+  const cards = factoryMode
+    ? [
+        ["我的采购单数量", data.cards.totalOrders],
+        ["进行中采购单", data.cards.inProgress],
+        ["待确认采购单", data.cards.factoryPending],
+        ["生产中采购单", data.cards.producing],
+        ["待质检采购单", data.cards.qcPending],
+        ["待发货采购单", data.cards.readyToShip],
+        ["已发货采购单", data.cards.shipped],
+        ["采购总金额（CNY）", moneyCny(data.cards.purchaseTotalCny)],
+        ["本月采购金额（CNY）", moneyCny(data.cards.monthPurchaseCny)],
+        ["提醒数量", data.reminders.length]
+      ]
+    : [
+        ["总订单数量", data.cards.totalOrders],
+        ["进行中订单", data.cards.inProgress],
+        ["待工厂确认", data.cards.factoryPending],
+        ["生产中订单", data.cards.producing],
+        ["待质检订单", data.cards.qcPending],
+        ["待收尾款", data.cards.balancePending],
+        ["待发货", data.cards.readyToShip],
+        ["已发货", data.cards.shipped],
+        ["本月销售额", moneyUsd(data.cards.monthSales)],
+        ["本月采购成本", data.cards.monthPurchase == null ? "无权限" : moneyCny(data.cards.monthPurchase)],
+        ["本月预估利润", data.cards.monthProfit == null ? "无权限" : moneyUsd(data.cards.monthProfit)],
+        ["提醒数量", data.reminders.length]
+      ];
+  const recentTable = factoryMode
+    ? simpleTable(data.recentOrders, ["poNo", "productionStatus", "qcStatus", "factoryDeliveryDate", "purchaseTotalCny"], ["采购单号", "生产状态", "质检", "工厂交期", "采购金额（CNY）"], (row, key) => key === "purchaseTotalCny" ? moneyCny(row[key]) : displayValue(row[key]))
+    : simpleTable(data.recentOrders, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate"], ["订单号", "客户", "状态", "付款", "预计交期"]);
+  $("#dashboard").innerHTML = `
+    <section class="grid cards">${cards.map(([label, value]) => `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("")}</section>
+    <section class="split">
+      <div class="panel">
+        <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的订单"}</h2>
+        ${recentTable}
+      </div>
+      <div class="panel">
+        <h2>延期与待办提醒</h2>
+        <div class="timeline">${data.reminders.map((r) => `<div class="timeline-item"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${r.createdAt.slice(0,10)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`}</div>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <h2>最近工厂更新记录</h2>
+      ${simpleTable(data.recentFactoryUpdates, ["actorName", "oldStatus", "newStatus", "note", "createdAt"], ["操作人", "原状态", "新状态", "备注", "时间"])}
+    </section>`;
+}
+
+function pageTitle(title, desc, action = "") {
+  return `<div class="page-title"><div><h1>${title}</h1><p>${desc}</p></div><div>${action}</div></div>`;
+}
+
+async function renderSalesOrders() {
+  shell(pageTitle("客户订单", "记录客户销售价格，并与工厂采购价分开管理。", `<button class="btn" id="showImportOrder">导入客户订单 PDF</button> <button class="btn primary" data-go="/admin/orders/new">新建订单</button>`) + importSalesOrderPanel() + listShell("sales-orders"));
+  bindGoButtons();
+  bindSalesOrderImport();
+  await loadSalesOrders();
+}
+
+function importSalesOrderPanel() {
+  return `
+    <section class="panel hidden" id="importOrderPanel">
+      <h2>导入客户订单 PDF</h2>
+      <div class="toolbar">
+        <div class="filters">
+          <input class="input" type="file" id="salesOrderPdf" accept="application/pdf,.pdf">
+        </div>
+        <button class="btn primary" id="importSalesOrderPdf">识别并生成客户订单</button>
+      </div>
+      <p class="muted">系统会识别客户、地址、贸易条款、运费、总金额和产品明细；产品名称会保存为中文 / English。</p>
+      <div id="importOrderResult"></div>
+    </section>`;
+}
+
+function bindSalesOrderImport() {
+  $("#showImportOrder")?.addEventListener("click", () => {
+    $("#importOrderPanel")?.classList.toggle("hidden");
+  });
+  $("#importSalesOrderPdf")?.addEventListener("click", async () => {
+    const file = $("#salesOrderPdf").files[0];
+    if (!file) return alert("请选择客户订单 PDF");
+    $("#importOrderResult").innerHTML = `<p class="notice">正在识别 PDF 并生成客户订单...</p>`;
+    try {
+      const result = await api("/api/import-sales-order", {
+        method: "POST",
+        body: JSON.stringify({
+          fileName: file.name,
+          contentBase64: await toBase64(file)
+        })
+      });
+      $("#importOrderResult").innerHTML = `<p class="notice">已识别 ${result.parsed.itemCount} 条产品明细，订单号 ${result.order.orderNo}。</p>`;
+      go(`/admin/orders/${result.order.id}`);
+    } catch (error) {
+      $("#importOrderResult").innerHTML = `<p class="notice">导入失败：${error.message}</p>`;
+    }
+  });
+}
+
+async function loadSalesOrders() {
+  const params = listParams("sales-orders");
+  const data = await api(`/api/sales-orders?${params}`);
+  data.scope = "sales-ordersPage";
+  $("#listBody").innerHTML = `
+    ${simpleTable(data.items, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate", "actions"], ["订单号", "客户", "状态", "付款", "预计交期", "操作"], (row, key) => {
+      if (key === "statusZh") return tag(row.statusZh, row.status);
+      if (key === "actions") return `<button class="btn small" data-go="/admin/orders/${row.id}">快速查看</button>`;
+      return displayValue(row[key]);
+    })}
+    ${pager(data, loadSalesOrders)}`;
+  bindGoButtons();
+}
+
+async function renderPurchaseOrders() {
+  const factory = state.user.role === "Factory";
+  shell(pageTitle(factory ? "我的采购订单" : "工厂采购订单", factory ? "这里只显示分配给当前工厂的采购订单，不显示客户资料、客户售价和利润。" : "管理工厂生产进度、确认、质检、付款和发货准备。", factory ? "" : `<button class="btn primary" data-go="/admin/purchase-orders/new">新建采购单</button>`) + listShell("purchase-orders"));
+  bindGoButtons();
+  await loadPurchaseOrders();
+}
+
+async function loadPurchaseOrders() {
+  const data = await api(`/api/purchase-orders?${listParams("purchase-orders")}`);
+  data.scope = "purchase-ordersPage";
+  $("#listBody").innerHTML = `
+    ${simpleTable(data.items, ["poNo", "factoryName", "productionStatus", "qcStatus", "factoryPaymentStatus", "factoryDeliveryDate", "purchaseTotalCny", "actions"], ["采购单号", "工厂", "生产状态", "质检", "工厂付款", "工厂交期", "采购金额（CNY）", "操作"], (row, key) => {
+      if (["productionStatus", "qcStatus", "factoryPaymentStatus"].includes(key)) return tag(row[key], row[key]);
+      if (key === "purchaseTotalCny") return moneyCny(row[key]);
+      if (key === "actions") return `<button class="btn small" data-po="${row.id}">快速查看</button>`;
+      return displayValue(row[key]);
+    })}
+    ${pager(data, loadPurchaseOrders)}`;
+  $$("[data-po]").forEach((btn) => btn.addEventListener("click", () => {
+    if (state.user.role === "Factory") go(`/factory/orders/${btn.dataset.po}`);
+    else renderPurchaseOrderModal(btn.dataset.po);
+  }));
+}
+
+function listShell(kind) {
+  return `
+    <section class="panel">
+      <div class="toolbar">
+        <div class="filters">
+          <input class="input" id="searchBox" placeholder="搜索订单号、客户、工厂、状态">
+          <select class="select" id="sortBox">
+            <option value="createdAt">按创建时间</option>
+            <option value="orderNo">按订单号</option>
+            <option value="poNo">按PO号</option>
+            <option value="expectedDeliveryDate">按交期</option>
+          </select>
+          <select class="select" id="dirBox"><option value="desc">降序</option><option value="asc">升序</option></select>
+        </div>
+        <button class="btn" id="refreshBtn">刷新</button>
+      </div>
+      <div id="listBody"></div>
+    </section>`;
+}
+
+function listParams(prefix) {
+  const page = state[`${prefix}Page`] || 1;
+  const q = encodeURIComponent($("#searchBox")?.value || "");
+  const sort = $("#sortBox")?.value || "createdAt";
+  const dir = $("#dirBox")?.value || "desc";
+  setTimeout(() => {
+    $("#searchBox")?.addEventListener("input", debounce(() => { state[`${prefix}Page`] = 1; prefix === "sales-orders" ? loadSalesOrders() : loadPurchaseOrders(); }, 250));
+    $("#sortBox")?.addEventListener("change", () => prefix === "sales-orders" ? loadSalesOrders() : loadPurchaseOrders());
+    $("#dirBox")?.addEventListener("change", () => prefix === "sales-orders" ? loadSalesOrders() : loadPurchaseOrders());
+    $("#refreshBtn")?.addEventListener("click", () => prefix === "sales-orders" ? loadSalesOrders() : loadPurchaseOrders());
+  });
+  return `q=${q}&sort=${sort}&dir=${dir}&page=${page}&pageSize=10`;
+}
+
+function pager(data, reload) {
+  setTimeout(() => {
+    $$(".pager-btn").forEach((btn) => btn.addEventListener("click", () => {
+      state[btn.dataset.scope] = Number(btn.dataset.page);
+      reload();
+    }));
+  });
+  const scope = data.scope || "sales-ordersPage";
+  return `<div class="toolbar" style="margin-top:12px"><span class="muted">共 ${data.total} 条，第 ${data.page}/${data.pages} 页</span><div><button class="btn small pager-btn" data-scope="${scope}" data-page="${Math.max(1, data.page - 1)}">上一页</button> <button class="btn small pager-btn" data-scope="${scope}" data-page="${Math.min(data.pages, data.page + 1)}">下一页</button></div></div>`;
+}
+
+async function renderNewSalesOrder() {
+  const [customers, products] = await Promise.all([api("/api/customers?pageSize=50"), api("/api/products?pageSize=50")]);
+  shell(pageTitle("新建客户订单", "创建客户订单后，可在详情页一键生成工厂采购订单。") + `
+    <form class="panel" id="newOrderForm">
+      <div class="form-grid">
+        <label>关联客户<select class="select" name="customerId">${customers.items.map((c) => `<option value="${c.id}">${c.company} / ${c.contact}</option>`).join("")}</select></label>
+        <label>交货方式<select class="select" name="deliveryTerm">${Object.keys(DELIVERY_LABELS).map((term) => `<option value="${term}" ${term === "FOB" ? "selected" : ""}>${DELIVERY_LABELS[term]}</option>`).join("")}</select></label>
+        <label>目的地国家<input class="input" name="destinationCountry" value="美国"></label>
+        <label>目的地地址<input class="input" name="destinationAddress" value="客户仓库"></label>
+        <label>运费<input class="input" name="freight" type="number" value="1000"></label>
+        <label>其他费用<input class="input" name="otherFees" type="number" value="120"></label>
+        <label>定金金额<input class="input" name="depositAmount" type="number" value="1000"></label>
+        <label>尾款金额<input class="input" name="balanceAmount" type="number" value="2000"></label>
+        <label>预计交货日期<input class="input" name="expectedDeliveryDate" type="date" value="${future(30)}"></label>
+        <label class="full">备注<textarea name="remark">新建测试订单</textarea></label>
+      </div>
+      <h2>产品明细</h2>
+      <div class="table-wrap"><table><thead><tr><th>产品名称（中文 / English）</th><th>数量</th><th>销售单价</th><th>标志要求</th><th>颜色</th><th>包装</th></tr></thead><tbody>
+        <tr>
+          <td><select class="select" name="productId">${products.items.map((p) => `<option value="${p.id}" data-name="${p.name}" data-model="${p.model}" data-price="${p.defaultSalesPrice}" data-purchase="${p.defaultPurchasePrice}">${p.name} / ${p.model}</option>`).join("")}</select></td>
+          <td><input class="input" name="quantity" type="number" value="500"></td>
+          <td><input class="input" name="salesUnitPrice" type="number" step="0.01" value="${products.items[0]?.defaultSalesPrice || 1}" placeholder="USD"></td>
+          <td><input class="input" name="logoRequirement" value="按客户文件"></td>
+          <td><input class="input" name="colorRequirement" value="黑色"></td>
+          <td><input class="input" name="packagingRequirement" value="出口纸箱"></td>
+        </tr>
+      </tbody></table></div>
+      <div style="height:14px"></div>
+      <button class="btn primary">创建客户订单</button>
+    </form>`);
+  $("#newOrderForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    const productSelect = $("[name=productId]");
+    const opt = productSelect.selectedOptions[0];
+    const quantity = Number(fd.get("quantity"));
+    const price = Number(fd.get("salesUnitPrice"));
+    const body = Object.fromEntries(fd);
+    body.items = [{
+      productId: fd.get("productId"),
+      productName: opt.dataset.name,
+      model: opt.dataset.model,
+      quantity,
+      salesUnitPrice: price,
+      salesTotal: quantity * price,
+      defaultPurchasePrice: Number(opt.dataset.purchase),
+      logoRequirement: fd.get("logoRequirement"),
+      colorRequirement: fd.get("colorRequirement"),
+      packagingRequirement: fd.get("packagingRequirement")
+    }];
+    const order = await api("/api/sales-orders", { method: "POST", body: JSON.stringify(body) });
+    go(`/admin/orders/${order.id}`);
+  });
+}
+
+async function renderNewPurchaseOrder() {
+  const [factories, products, salesOrders] = await Promise.all([
+    api("/api/factories?pageSize=50"),
+    api("/api/products?pageSize=50"),
+    api("/api/sales-orders?pageSize=50")
+  ]);
+  shell(pageTitle("新建工厂采购单", "贸易公司可直接把采购单分配给对应工厂，工厂账号登录后只能看到分配给自己的采购单。", `<button class="btn" data-go="/admin/purchase-orders">返回采购单列表</button>`) + `
+    <form class="panel" id="newPoForm">
+      <div class="form-grid">
+        <label>分配工厂<select class="select" name="factoryId" required>
+          ${factories.items.map((factory) => `<option value="${factory.id}">${factory.name}</option>`).join("")}
+        </select></label>
+        <label>关联客户订单（可选）<select class="select" name="salesOrderId">
+          <option value="">不关联客户订单，直接生成采购单</option>
+          ${salesOrders.items.map((order) => `<option value="${order.id}">${order.orderNo} / ${order.customerCompany}</option>`).join("")}
+        </select></label>
+        <label>下单日期<input class="input" name="orderDate" type="date" value="${future(0)}"></label>
+        <label>工厂交期<input class="input" name="factoryDeliveryDate" type="date" value="${future(30)}"></label>
+        <label>工厂付款状态<select class="select" name="factoryPaymentStatus">
+          <option value="Unpaid">未付款</option>
+          <option value="Deposit Paid">已付定金</option>
+          <option value="Balance Pending">待付尾款</option>
+          <option value="Paid">已付清</option>
+        </select></label>
+        <label>工厂确认状态<select class="select" name="factoryConfirmStatus">
+          <option value="Pending">待工厂确认</option>
+          <option value="Confirmed">工厂已确认</option>
+        </select></label>
+        <label class="full">定制 Logo 文件<input class="input" type="file" id="customLogoFile" accept="image/*,.pdf,.ai,.eps,.svg,.cdr,.psd"></label>
+        <label class="full">备注<textarea name="remark">请工厂确认交期，并按要求上传生产图片。</textarea></label>
+      </div>
+      <div class="toolbar">
+        <h2 style="margin:0">采购产品明细</h2>
+        <button class="btn" type="button" id="addPoItem">添加一行</button>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>产品名称（中文 / English）</th><th>数量</th><th>工厂采购单价（人民币）</th><th>规格</th><th>标志要求</th><th>颜色</th><th>包装</th><th>操作</th></tr></thead><tbody id="poItemsBody">
+        ${poItemRowTemplate(products.items)}
+      </tbody></table></div>
+      <div style="height:14px"></div>
+      <button class="btn primary">创建并分配给工厂</button>
+    </form>`);
+  bindGoButtons();
+  const poItemsBody = $("#poItemsBody");
+  const bindPoItemRows = () => {
+    $$(".po-product", poItemsBody).forEach((select) => {
+      select.onchange = () => {
+        const row = select.closest("tr");
+        const purchaseInput = $(".po-purchase-price", row);
+        purchaseInput.value = select.selectedOptions[0].dataset.purchase || purchaseInput.value;
+      };
+    });
+    $$(".remove-po-item", poItemsBody).forEach((button) => {
+      button.onclick = () => {
+        if ($$("tr", poItemsBody).length <= 1) return alert("至少保留一条采购产品明细");
+        button.closest("tr").remove();
+      };
+    });
+  };
+  $("#addPoItem").addEventListener("click", () => {
+    poItemsBody.insertAdjacentHTML("beforeend", poItemRowTemplate(products.items));
+    bindPoItemRows();
+  });
+  bindPoItemRows();
+  $("#newPoForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    const body = Object.fromEntries(fd);
+    if (!body.salesOrderId) delete body.salesOrderId;
+    body.items = $$("#poItemsBody tr").map((row) => {
+      const productSelect = $(".po-product", row);
+      const opt = productSelect.selectedOptions[0];
+      const quantity = Number($(".po-quantity", row).value || 0);
+      const purchaseUnitPrice = Number($(".po-purchase-price", row).value || 0);
+      return {
+        productId: productSelect.value,
+        productName: opt.dataset.name,
+        model: opt.dataset.model,
+        specification: $(".po-specification", row).value,
+        quantity,
+        purchaseUnitPrice,
+        purchaseTotal: quantity * purchaseUnitPrice,
+        logoRequirement: $(".po-logo", row).value,
+        colorRequirement: $(".po-color", row).value,
+        packagingRequirement: $(".po-packaging", row).value
+      };
+    }).filter((item) => item.productId && item.quantity > 0);
+    if (!body.items.length) return alert("请至少填写一条有效的采购产品明细");
+    try {
+      const po = await api("/api/purchase-orders", { method: "POST", body: JSON.stringify(body) });
+      const logoFile = $("#customLogoFile").files[0];
+      if (logoFile) {
+        await api("/api/files", { method: "POST", body: JSON.stringify({
+          salesOrderId: "",
+          purchaseOrderId: po.id,
+          orderNo: po.poNo,
+          fileType: "Logo File",
+          fileName: logoFile.name,
+          contentBase64: await toBase64(logoFile)
+        }) });
+      }
+      renderPurchaseOrderModal(po.id);
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+}
+
+function poItemRowTemplate(products) {
+  return `<tr>
+    <td><select class="select po-product">${products.map((p) => `<option value="${p.id}" data-name="${p.name}" data-model="${p.model}" data-purchase="${p.defaultPurchasePrice}">${p.name} / ${p.model}</option>`).join("")}</select></td>
+    <td><input class="input po-quantity" type="number" min="1" value="500"></td>
+    <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
+    <td><input class="input po-specification" value="按确认样生产"></td>
+    <td><input class="input po-logo" value="按确认稿"></td>
+    <td><input class="input po-color" value="按订单要求"></td>
+    <td><input class="input po-packaging" value="出口纸箱"></td>
+    <td><button class="btn small danger remove-po-item" type="button">删除</button></td>
+  </tr>`;
+}
+
+async function renderSalesOrderDetail(id) {
+  const order = await api(`/api/sales-orders/${id}`);
+  const factories = await api("/api/factories?pageSize=50");
+  shell(pageTitle(`客户订单 ${order.orderNo}`, "订单详情、时间线、采购单、文件、利润与状态更新。", `<button class="btn" data-go="/admin/sales-orders">返回列表</button>`) + `
+    <section class="panel">
+      <div class="toolbar">
+        <div>${tag(order.statusZh, order.status)} ${tag(order.paymentStatus, order.paymentStatus)}</div>
+        <div class="filters">
+          <select class="select" id="statusSelect">${state.orderStatuses.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
+          <button class="btn primary" id="updateStatus">更新状态</button>
+          <button class="btn" id="deleteOrder">删除订单</button>
+        </div>
+      </div>
+      <div class="detail-grid">
+        ${field("客户", `${order.customerCompany} / ${order.customerName}`)}
+        ${field("交货方式", deliveryLabel(order.deliveryTerm))}
+        ${field("目的地", `${order.destinationCountry} ${order.destinationAddress}`)}
+        ${field("预计交期", order.expectedDeliveryDate)}
+        ${field("定金/尾款（USD）", `${moneyUsd(order.depositAmount)} / ${moneyUsd(order.balanceAmount)}`)}
+        ${field("运费/其他费用（USD）", `${moneyUsd(order.freight)} / ${moneyUsd(order.otherFees)}`)}
+      </div>
+      ${order.profit ? `<h2>利润核算</h2><div class="detail-grid">${field("销售总额（USD）", moneyUsd(order.profit.salesTotal))}${field("采购成本（CNY）", moneyCny(order.profit.purchaseCostCny))}${field("采购折算（USD）", moneyUsd(order.profit.purchaseCost))}${field("预估利润（USD）", moneyUsd(order.profit.estimatedProfit))}${field("利润率", `${order.profit.profitRate}%`)}</div>` : `<p class="notice">当前角色无权查看工厂采购成本和利润。</p>`}
+      <h2>产品明细</h2>${simpleTable(order.items, ["productName", "model", "quantity", "salesUnitPrice", "salesTotal", "logoRequirement", "colorRequirement"], ["产品名称（中文 / English）", "型号", "数量", "销售单价（USD）", "销售总价（USD）", "标志要求", "颜色"], (row, key) => ["salesUnitPrice", "salesTotal"].includes(key) ? moneyUsd(row[key]) : displayValue(row[key]))}
+    </section>
+    <section class="split">
+      <div class="panel">
+        <h2>工厂采购订单</h2>
+        <div class="toolbar">
+          <select class="select" id="factorySelect">${factories.items.map((f) => `<option value="${f.id}">${f.name}</option>`).join("")}</select>
+          <button class="btn primary" id="makePo">从客户订单生成采购单</button>
+        </div>
+        ${simpleTable(order.purchaseOrders, ["poNo", "factoryName", "productionStatus", "qcStatus", "actions"], ["采购单号", "工厂", "生产状态", "质检", "操作"], (row, key) => key === "actions" ? `<button class="btn small" data-po="${row.id}">查看</button>` : displayValue(row[key]))}
+      </div>
+      <div class="panel">
+        <h2>订单时间线</h2>
+        <div class="timeline">${order.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${tl.createdAt.slice(0,16).replace("T"," ")}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
+      </div>
+    </section>
+    ${filePanel(order)}
+    <section class="panel" style="margin-top:14px">
+      <h2>导出</h2>
+      <a class="btn primary" href="/api/export?type=order&id=${order.id}">导出订单 PDF</a>
+      <a class="btn" href="/api/export?type=pi&id=${order.id}">导出客户形式发票 PDF</a>
+      <a class="btn" href="/api/export?type=sales-orders">导出客户订单表格</a>
+    </section>`);
+  bindGoButtons();
+  $("#updateStatus").addEventListener("click", async () => {
+    await api(`/api/sales-orders/${order.id}`, { method: "PATCH", body: JSON.stringify({ status: $("#statusSelect").value, note: "页面手动更新" }) });
+    renderSalesOrderDetail(order.id);
+  });
+  $("#deleteOrder").addEventListener("click", async () => {
+    if (confirm("删除订单需要二次确认，确定删除？")) {
+      await api(`/api/sales-orders/${order.id}?confirm=DELETE`, { method: "DELETE" });
+      go("/admin/sales-orders");
+    }
+  });
+  $("#makePo").addEventListener("click", async () => {
+    await api("/api/purchase-orders", { method: "POST", body: JSON.stringify({ salesOrderId: order.id, factoryId: $("#factorySelect").value }) });
+    renderSalesOrderDetail(order.id);
+  });
+  bindFiles(order);
+  $$("[data-po]").forEach((btn) => btn.addEventListener("click", () => renderPurchaseOrderModal(btn.dataset.po)));
+}
+
+async function renderPurchaseOrderDetail(id) {
+  const po = await api(`/api/purchase-orders/${id}`);
+  shell(pageTitle(`工厂订单 ${po.poNo}`, "工厂端只显示生产、质检、包装、发货准备相关信息。", `<button class="btn" data-go="/factory/orders">返回</button>`) + purchaseOrderView(po, true));
+  bindGoButtons();
+  bindPoActions(po, true);
+}
+
+async function renderPurchaseOrderModal(id) {
+  const po = await api(`/api/purchase-orders/${id}`);
+  shell(pageTitle(`工厂采购订单 ${po.poNo}`, "采购价和工厂付款仅对授权角色显示；工厂端不会看到客户价格和利润。", `<button class="btn" data-go="/admin/purchase-orders">返回列表</button>`) + purchaseOrderView(po, false));
+  bindGoButtons();
+  bindPoActions(po, false);
+}
+
+function purchaseOrderView(po, factoryMode) {
+  const financeColumns = po.items.some((item) => item.purchaseUnitPrice !== undefined);
+  return `
+    <section class="panel">
+      <div class="toolbar">
+        <div>${tag(po.productionStatus, po.productionStatus)} ${tag(po.qcStatus, po.qcStatus)}</div>
+        <div class="filters">
+          <select class="select" id="poStatus">${state.orderStatuses.map((s) => `<option value="${s}" ${s === po.productionStatus ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
+          <button class="btn primary" id="savePoStatus">保存交期/状态/单价</button>
+        </div>
+      </div>
+      <div class="detail-grid">
+        ${field("工厂", po.factoryName)}
+        <label class="field"><span>工厂交期</span><input class="input" id="factoryDeliveryDate" type="date" value="${po.factoryDeliveryDate || ""}"></label>
+        ${field("确认状态", statusLabel(po.factoryConfirmStatus))}
+        ${field("付款状态", statusLabel(po.factoryPaymentStatus))}
+        ${field("生产状态", statusLabel(po.productionStatus))}
+        ${field("质检状态", statusLabel(po.qcStatus))}
+      </div>
+      <h2>产品明细</h2>
+      ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
+    </section>
+    <section class="split">
+      <div class="panel">
+        <h2>质检报告</h2>
+        ${simpleTable(po.qcReports || [], ["reportNo", "result", "inspectorName", "inspectionDate", "actions"], ["报告号", "结果", "检查人", "日期", "操作"], (row, key) => key === "actions" ? `<a class="btn small" href="/api/export?type=qc&id=${row.id}">导出 PDF</a>` : displayValue(row[key]))}
+        ${factoryMode ? "" : `<button class="btn primary" id="createQc">完成质检</button>`}
+      </div>
+      <div class="panel">
+        <h2>时间线</h2>
+        <div class="timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${tl.createdAt.slice(0,16).replace("T"," ")}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
+      </div>
+    </section>
+    ${filePanel(po, true)}
+    <section class="panel" style="margin-top:14px">
+      <h2>导出</h2>
+      <a class="btn" href="/api/export?type=po&id=${po.id}">导出工厂采购单 PDF</a>
+      <a class="btn" href="/api/export?type=purchase-orders">导出采购订单表格</a>
+    </section>`;
+}
+
+function purchaseItemsEditTable(items = [], factoryMode = false) {
+  if (!items.length) return `<p class="muted">暂无数据</p>`;
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>产品名称（中文 / English）</th><th>型号</th><th>数量</th><th>工厂采购单价（CNY）</th><th>工厂采购总价（CNY）</th><th>标志要求</th><th>包装</th></tr></thead>
+    <tbody>
+      ${items.map((item) => `<tr data-po-item-id="${item.id}" data-po-qty="${Number(item.quantity || 0)}">
+        <td>${displayValue(item.productName)}</td>
+        <td>${displayValue(item.model)}</td>
+        <td>${factoryMode ? `<strong>${Number(item.quantity || 0)}</strong>` : `<input class="input po-edit-qty" type="number" min="0" step="1" value="${Number(item.quantity || 0)}">`}</td>
+        <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
+        <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
+        <td>${displayValue(item.logoRequirement)}</td>
+        <td>${displayValue(item.packagingRequirement)}</td>
+      </tr>`).join("")}
+    </tbody>
+  </table></div>`;
+}
+
+function bindPoActions(po, factoryMode) {
+  const readPoQuantity = (row) => Number($(".po-edit-qty", row)?.value ?? row.dataset.poQty ?? 0);
+  const recalcPoTotals = () => {
+    $$("[data-po-item-id]").forEach((row) => {
+      const qty = readPoQuantity(row);
+      const price = Number($(".po-edit-price", row)?.value || 0);
+      const target = $(".po-edit-total", row);
+      if (target) target.textContent = moneyCny(qty * price);
+    });
+  };
+  $$(".po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
+  $("#savePoStatus").addEventListener("click", async () => {
+    const items = $$("[data-po-item-id]").map((row) => ({
+      id: row.dataset.poItemId,
+      quantity: readPoQuantity(row),
+      purchaseUnitPrice: Number($(".po-edit-price", row)?.value || 0)
+    }));
+    await api(`/api/purchase-orders/${po.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        productionStatus: $("#poStatus").value,
+        factoryConfirmStatus: "Confirmed",
+        factoryDeliveryDate: $("#factoryDeliveryDate")?.value || po.factoryDeliveryDate,
+        items,
+        note: "页面更新工厂交期、生产状态和采购单价"
+      })
+    });
+    factoryMode ? renderPurchaseOrderDetail(po.id) : renderPurchaseOrderModal(po.id);
+  });
+  $("#createQc")?.addEventListener("click", async () => {
+    await api("/api/qc", { method: "POST", body: JSON.stringify({ purchaseOrderId: po.id, result: "Passed", remark: "页面快速创建 QC：全部通过" }) });
+    renderPurchaseOrderModal(po.id);
+  });
+  bindFiles(po, true);
+}
+
+function filePanel(order, isPo = false) {
+  const fileTypes = state.user.role === "Factory"
+    ? ["Factory Production Image", "QC Image", "Packing Image", "Loading Image", "Logistics File", "Other Attachment"]
+    : ["Customer Quotation", "PI", "Contract", "Logo File", "Product Image", "Factory Production Image", "QC Image", "Packing Image", "Loading Image", "Bill of Lading", "Invoice", "Logistics File", "Payment Screenshot", "Other Attachment"];
+  return `<section class="panel" style="margin-top:14px">
+    <h2>文件和图片归档</h2>
+    <div class="toolbar">
+      <div class="filters">
+        <select class="select" id="fileType">
+          ${fileTypes.map((x) => `<option value="${x}">${fileTypeLabel(x)}</option>`).join("")}
+        </select>
+        <input class="input" type="file" id="fileInput">
+      </div>
+      <button class="btn primary" id="uploadFile">上传并按订单号归档</button>
+    </div>
+    ${simpleTable(order.files || [], ["fileType", "fileName", "uploadedByName", "createdAt"], ["类型", "文件名", "上传人", "时间"])}
+  </section>`;
+}
+
+function bindFiles(order, isPo = false) {
+  $("#uploadFile")?.addEventListener("click", async () => {
+    const file = $("#fileInput").files[0];
+    if (!file) return alert("请选择文件");
+    const contentBase64 = await toBase64(file);
+    await api("/api/files", { method: "POST", body: JSON.stringify({
+      salesOrderId: isPo ? "" : order.id,
+      purchaseOrderId: isPo ? order.id : "",
+      orderNo: order.orderNo || order.poNo,
+      fileType: $("#fileType").value,
+      fileName: file.name,
+      contentBase64
+    }) });
+    isPo ? (state.user.role === "Factory" ? renderPurchaseOrderDetail(order.id) : renderPurchaseOrderModal(order.id)) : renderSalesOrderDetail(order.id);
+  });
+}
+
+function toBase64(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function renderCrud(resource, title, fields) {
+  shell(pageTitle(title, "支持搜索、分页、快速新增。") + `
+    <section class="split">
+      <form class="panel" id="crudForm">
+        <h2>新增</h2>
+        <div class="form-grid">${fields.map((f) => fieldInput(f)).join("")}</div>
+        <div style="height:14px"></div><button class="btn primary">保存</button>
+      </form>
+      <div class="panel">
+        <h2>列表</h2>
+        <input class="input" id="crudSearch" placeholder="搜索">
+        <div id="crudList" style="margin-top:12px"></div>
+      </div>
+    </section>`);
+  const load = async () => {
+    const data = await api(`/api/${resource}?q=${encodeURIComponent($("#crudSearch").value || "")}&pageSize=50`);
+    $("#crudList").innerHTML = simpleTable(data.items, fields.slice(0, 5).map((f) => f.name), fields.slice(0, 5).map((f) => f.label));
+  };
+  $("#crudSearch").addEventListener("input", debounce(load, 250));
+  $("#crudForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.currentTarget));
+    await api(`/api/${resource}`, { method: "POST", body: JSON.stringify(body) });
+    event.currentTarget.reset();
+    load();
+  });
+  load();
+}
+
+async function renderQc() {
+  shell(pageTitle("质检模块", "创建质检报告、记录检查项、上传质检图片并导出 PDF。") + `<section class="panel"><div id="qcList">加载中...</div></section>`);
+  const data = await api("/api/qc");
+  $("#qcList").innerHTML = simpleTable(data.items, ["reportNo", "purchaseOrderId", "result", "inspectorName", "inspectionDate", "actions"], ["报告号", "采购单", "结果", "检查人", "日期", "导出"], (row, key) => key === "actions" ? `<a class="btn small" href="/api/export?type=qc&id=${row.id}">导出 PDF</a>` : displayValue(row[key]));
+}
+
+async function renderPayments() {
+  shell(pageTitle("付款管理", "财务角色管理客户收款、工厂付款、付款截图和付款状态。") + `
+    <section class="split">
+      <form class="panel" id="payForm">
+        <h2>新增付款记录</h2>
+        <div class="form-grid">
+          <label>类型<select class="select" name="type">${Object.entries(PAYMENT_TYPE_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
+          <label>客户订单编号<input class="input" name="salesOrderId" placeholder="如 so-1"></label>
+          <label>采购订单编号<input class="input" name="purchaseOrderId" placeholder="如 po-1"></label>
+          <label>金额<input class="input" name="amount" type="number"></label>
+          <label>方式<input class="input" name="method" value="T/T"></label>
+          <label>标记已结清<select class="select" name="markPaid"><option value="">否</option><option value="true">是</option></select></label>
+        </div><div style="height:14px"></div><button class="btn primary">保存付款</button>
+      </form>
+      <div class="panel"><h2>付款记录</h2><div id="payList"></div></div>
+    </section>`);
+  const load = async () => {
+    const data = await api("/api/payments");
+    $("#payList").innerHTML = simpleTable(data.items, ["type", "salesOrderId", "purchaseOrderId", "amount", "paymentDate", "method"], ["类型", "客户订单", "采购订单", "金额", "日期", "方式"]);
+  };
+  $("#payForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.currentTarget));
+    body.markPaid = body.markPaid === "true";
+    await api("/api/payments", { method: "POST", body: JSON.stringify(body) });
+    event.currentTarget.reset();
+    load();
+  });
+  load();
+}
+
+function renderReports() {
+  shell(pageTitle("报表导出", "第一版支持表格文件、客户形式发票、工厂采购单和质检报告 PDF。") + `
+    <section class="panel">
+      <h2>表格报表</h2>
+      <a class="btn" href="/api/export?type=sales-orders">客户订单表格</a>
+      <a class="btn" href="/api/export?type=purchase-orders">工厂采购订单表格</a>
+      <a class="btn" href="/api/export?type=profit">订单利润报表</a>
+      <p class="muted">客户形式发票、工厂采购单、质检报告 PDF 可在对应订单详情页按单导出。</p>
+    </section>`);
+}
+
+async function renderSettings() {
+  shell(pageTitle("设置与审计", "角色权限说明、账号注册审核和最近操作日志。") + `
+    <section class="panel">
+      <h2>注册审核</h2>
+      <div id="userApprovalList">加载中...</div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <h2>权限矩阵</h2>
+      ${permissionMatrix()}
+      <h2>最近审计日志</h2>
+      <div id="auditList"></div>
+    </section>`);
+  const [logs, pending] = await Promise.all([api("/api/audit-logs"), api("/api/users?status=pending")]);
+  $("#userApprovalList").innerHTML = simpleTable(pending.items, ["name", "email", "role", "factoryName", "businessLicenseFileName", "createdAt", "actions"], ["用户名", "邮箱", "类型", "工厂", "营业执照", "申请时间", "操作"], (row, key) => {
+    if (key === "role") return roleLabel(row.role);
+    if (key === "actions") return `<button class="btn small primary" data-approve-user="${row.id}">通过</button> <button class="btn small danger" data-reject-user="${row.id}">拒绝</button>`;
+    return displayValue(row[key]);
+  });
+  $$("[data-approve-user]").forEach((btn) => btn.addEventListener("click", async () => {
+    await api(`/api/users/${btn.dataset.approveUser}`, { method: "PATCH", body: JSON.stringify({ approvalStatus: "approved" }) });
+    renderSettings();
+  }));
+  $$("[data-reject-user]").forEach((btn) => btn.addEventListener("click", async () => {
+    const rejectedReason = prompt("请输入拒绝原因", "资料不完整") || "管理员拒绝";
+    await api(`/api/users/${btn.dataset.rejectUser}`, { method: "PATCH", body: JSON.stringify({ approvalStatus: "rejected", rejectedReason }) });
+    renderSettings();
+  }));
+  $("#auditList").innerHTML = simpleTable(logs.items, ["createdAt", "actorName", "entityType", "action"], ["时间", "操作人", "对象", "动作"]);
+}
+
+function permissionMatrix() {
+  const rows = [
+    { role: "Admin", scope: "全部数据、财务、利润、删除、审计" },
+    { role: "Sales", scope: "只能查看和管理自己提交的客户订单；可以查看全部工厂列表；无采购价和利润" },
+    { role: "Merchandiser", scope: "订单/采购单进度、质检、文件；不能修改核心财务字段" },
+    { role: "Finance", scope: "收付款、成本、利润、财务报表" },
+    { role: "Factory", scope: "仅自己的采购订单；可提交交期和人民币采购单价；无客户联系方式、客户售价、利润" }
+  ];
+  return simpleTable(rows, ["role", "scope"], ["角色", "权限"]);
+}
+
+function simpleTable(rows = [], keys = [], labels = keys, cell = (row, key) => displayValue(row[key])) {
+  if (!rows.length) return `<p class="muted">暂无数据</p>`;
+  return `<div class="table-wrap"><table><thead><tr>${labels.map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${keys.map((key) => `<td>${cell(row, key)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function field(label, value) {
+  return `<div class="field"><span>${label}</span><strong>${displayValue(value)}</strong></div>`;
+}
+
+function tag(label, status = "") {
+  const s = String(status || label);
+  let color = "blue";
+  if (/Paid|Passed|Confirmed|Delivered|Closed|Shipped/.test(s)) color = "green";
+  if (/Pending|Inspection|Production|Need/.test(s)) color = "yellow";
+  if (/Failed|Cancelled|Overdue|Rework/.test(s)) color = "red";
+  return `<span class="tag ${color}">${displayValue(label)}</span>`;
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role || "";
+}
+
+function statusLabel(status) {
+  return state.statusZh?.[status] || STATUS_LABELS[status] || status || "";
+}
+
+function paymentTypeLabel(type) {
+  return PAYMENT_TYPE_LABELS[type] || type || "";
+}
+
+function fileTypeLabel(type) {
+  return FILE_TYPE_LABELS[type] || type || "";
+}
+
+function deliveryLabel(term) {
+  return DELIVERY_LABELS[term] || term || "";
+}
+
+function severityLabel(level) {
+  return { low: "低", medium: "中", high: "高", critical: "紧急" }[level] || level || "";
+}
+
+function displayValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "string") return value;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value.slice(0, 16).replace("T", " ");
+  if (ROLE_LABELS[value]) return roleLabel(value);
+  if (STATUS_LABELS[value] || state.statusZh?.[value]) return statusLabel(value);
+  if (PAYMENT_TYPE_LABELS[value]) return paymentTypeLabel(value);
+  if (FILE_TYPE_LABELS[value]) return fileTypeLabel(value);
+  if (DELIVERY_LABELS[value]) return deliveryLabel(value);
+  if (SOURCE_LABELS[value]) return SOURCE_LABELS[value];
+  if (UNIT_LABELS[value]) return UNIT_LABELS[value];
+  if (value === "create") return "创建";
+  if (value === "update") return "更新";
+  if (value === "delete") return "删除";
+  if (value === "register") return "注册";
+  if (value === "sales_order") return "客户订单";
+  if (value === "purchase_order") return "工厂采购订单";
+  if (value === "qc_report") return "质检报告";
+  if (value === "payment") return "付款记录";
+  if (value === "order_file") return "订单文件";
+  if (value === "user") return "用户";
+  return value;
+}
+
+function money(value, symbol = "$") {
+  if (value === null || value === undefined || value === "") return "-";
+  return `${symbol}${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function moneyUsd(value) {
+  return money(value, "$");
+}
+
+function moneyCny(value) {
+  return money(value, "¥");
+}
+
+function future(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function bindGoButtons() {
+  $$("[data-go]").forEach((btn) => btn.addEventListener("click", () => go(btn.dataset.go)));
+}
+
+function debounce(fn, delay) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+function fieldInput(field) {
+  const common = `name="${field.name}" ${field.required ? "required" : ""}`;
+  if (field.type === "select") return `<label>${field.label}<select class="select" ${common}>${field.options.map((o) => `<option value="${o}">${displayValue(o)}</option>`).join("")}</select></label>`;
+  if (field.type === "textarea") return `<label class="full">${field.label}<textarea ${common}></textarea></label>`;
+  return `<label>${field.label}<input class="input" ${common} type="${field.type || "text"}" value="${field.value || ""}"></label>`;
+}
+
+function customerFields() {
+  return [
+    { name: "name", label: "客户名称", required: true },
+    { name: "company", label: "公司名称" },
+    { name: "country", label: "国家" },
+    { name: "contact", label: "联系人" },
+    { name: "email", label: "邮箱" },
+    { name: "whatsapp", label: "WhatsApp" },
+    { name: "phone", label: "电话" },
+    { name: "address", label: "地址" },
+    { name: "source", label: "客户来源", type: "select", options: ["LinkedIn", "Website", "Alibaba", "WhatsApp", "Referral", "Other"] },
+    { name: "level", label: "客户等级", type: "select", options: ["A", "B", "C"] },
+    { name: "remark", label: "备注", type: "textarea" }
+  ];
+}
+
+function factoryFields() {
+  return [
+    { name: "name", label: "工厂名称", required: true },
+    { name: "contact", label: "联系人" },
+    { name: "phone", label: "电话" },
+    { name: "wechat", label: "微信" },
+    { name: "email", label: "邮箱" },
+    { name: "address", label: "地址" },
+    { name: "mainProducts", label: "主营产品" },
+    { name: "paymentTerms", label: "付款方式" },
+    { name: "leadTimeDays", label: "常规交期", type: "number" },
+    { name: "qualityScore", label: "质量评分", type: "number" },
+    { name: "deliveryScore", label: "交期评分", type: "number" },
+    { name: "cooperationScore", label: "配合度评分", type: "number" },
+    { name: "remark", label: "备注", type: "textarea" }
+  ];
+}
+
+function productFields() {
+  return [
+    { name: "name", label: "产品名称（中文 / English）", required: true },
+    { name: "model", label: "产品型号" },
+    { name: "category", label: "产品分类" },
+    { name: "image", label: "产品图片" },
+    { name: "defaultSalesPrice", label: "默认销售单价", type: "number" },
+    { name: "defaultPurchasePrice", label: "默认工厂采购价", type: "number" },
+    { name: "unit", label: "单位", type: "select", options: ["piece", "pair", "set", "kg", "lb"] },
+    { name: "weight", label: "重量", type: "number" },
+    { name: "packageSize", label: "包装尺寸" },
+    { name: "remark", label: "备注", type: "textarea" }
+  ];
+}
+
+boot();
