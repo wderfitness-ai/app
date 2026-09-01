@@ -636,12 +636,12 @@ function drawKeyValueGrid(doc, rows, currency) {
 function drawSummary(doc, items = []) {
   if (!items.length) return;
   const x = PDF_MARGIN;
-  const y = doc.y;
   const width = doc.page.width - PDF_MARGIN * 2;
   const colWidth = width / items.length;
   const compact = Boolean(doc._pdfCompact);
   const rowHeight = compact ? 28 : 32;
   ensurePdfPageSpace(doc, rowHeight * 2 + 10);
+  const y = doc.y;
   items.forEach((item, index) => {
     const cellX = x + index * colWidth;
     doc.rect(cellX, y, colWidth, rowHeight).fillAndStroke(PDFKIT_COLORS.dark, PDFKIT_COLORS.border);
@@ -738,6 +738,7 @@ async function renderStructuredPdfWithJs(document, options = {}) {
       doc.fontSize(compact ? 12 : 13).fillColor(PDFKIT_COLORS.text).text(section.title || "", PDF_MARGIN, doc.y, { width: doc.page.width - PDF_MARGIN * 2 });
       doc.moveDown(compact ? 0.25 : 0.4);
       if (section.kind === "table") drawPdfTable(doc, section, document.currencySymbol || "$");
+      if (section.kind === "summary") drawSummary(doc, section.items || []);
       if (section.kind === "kv") drawKeyValueGrid(doc, section.rows || [], section.currencySymbol || document.currencySymbol || "$");
       if (!section.kind || section.kind === "lines") {
         for (const line of section.lines || []) doc.fontSize(9).fillColor(PDFKIT_COLORS.text).text(line);
@@ -1231,6 +1232,17 @@ function purchaseTotalsRows(db, purchaseOrder) {
   return rows;
 }
 
+function purchaseFinanceItems(total) {
+  const amount = Number(total || 0);
+  const deposit = amount * 0.3;
+  const balance = amount - deposit;
+  return [
+    { label: "Total Amount / 总金额", value: `¥${amount.toFixed(2)}` },
+    { label: "30% Advance Payment / 30%预付款金额", value: `¥${deposit.toFixed(2)}` },
+    { label: "Balance Payment / 尾款金额", value: `¥${balance.toFixed(2)}` }
+  ];
+}
+
 function pdfDocumentPayload(db, type, idValue, user) {
   if (type === "pi" || type === "order") {
     const so = db.sales_orders.find((o) => o.id === idValue);
@@ -1372,6 +1384,11 @@ function pdfDocumentPayload(db, type, idValue, user) {
           widths: [46, 22, 18, 24, 20, 16, 28, 24, 30],
           moneyCols: [7, 8],
           rows: purchaseProductRows(db, po)
+        },
+        {
+          title: "Financial Calculation / 财务核算",
+          kind: "summary",
+          items: purchaseFinanceItems(total)
         }
       ],
       notes: [po.remark || "Factory must confirm delivery date, product details, logo/artwork and packing before mass production."]

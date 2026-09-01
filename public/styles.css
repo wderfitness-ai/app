@@ -470,6 +470,43 @@ tr:hover td { background: #fbfdff; }
   margin-bottom: 4px;
 }
 
+.purchase-finance {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.purchase-finance h2 {
+  margin-bottom: 10px;
+}
+
+.finance-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.finance-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.finance-card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finance-card strong {
+  font-size: 20px;
+  color: #111827;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -515,7 +552,7 @@ tr:hover td { background: #fbfdff; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; }
-  .cards, .split, .detail-grid, .form-grid, .qc-upload-grid, .qc-gallery-grid { grid-template-columns: 1fr; }
+  .cards, .split, .detail-grid, .form-grid, .qc-upload-grid, .qc-gallery-grid, .finance-card-grid { grid-template-columns: 1fr; }
   .topbar { position: relative; padding: 0 14px; }
   .page { padding: 16px; }
 }

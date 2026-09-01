@@ -855,6 +855,7 @@ function purchaseOrderView(po, factoryMode) {
       </div>
       <h2>产品明细</h2>
       ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
+      ${purchaseFinanceSummary(po.items)}
     </section>
     <section class="split">
       <div class="panel">
@@ -899,6 +900,31 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
       </tr>`).join("")}
     </tbody>
   </table></div>`;
+}
+
+function purchaseFinanceSummary(items = []) {
+  const total = purchaseTotalAmount(items);
+  const deposit = total * 0.3;
+  const balance = total - deposit;
+  return `<div class="purchase-finance" id="purchaseFinanceSummary">
+    <h2>财务核算</h2>
+    <div class="finance-card-grid">
+      ${financeCard("总金额", "purchaseFinanceTotal", total)}
+      ${financeCard("30%预付款金额", "purchaseFinanceDeposit", deposit)}
+      ${financeCard("尾款金额", "purchaseFinanceBalance", balance)}
+    </div>
+  </div>`;
+}
+
+function financeCard(label, id, value) {
+  return `<div class="finance-card">
+    <span>${label}</span>
+    <strong id="${id}">${moneyCny(value)}</strong>
+  </div>`;
+}
+
+function purchaseTotalAmount(items = []) {
+  return items.reduce((total, item) => total + Number(item.purchaseTotal || 0), 0);
 }
 
 function canEditPurchasePaymentStatus() {
@@ -1001,6 +1027,17 @@ function bindQcPhotoUploads(po, factoryMode) {
 
 function bindPoActions(po, factoryMode) {
   const readPoQuantity = (row) => Number($(".po-edit-qty", row)?.value ?? row.dataset.poQty ?? 0);
+  const updateFinanceSummary = () => {
+    const total = $$("[data-po-item-id]").reduce((sumValue, row) => {
+      const price = Number($(".po-edit-price", row)?.value || 0);
+      return sumValue + readPoRowFreightWeightAmount(row) * price;
+    }, 0);
+    const deposit = total * 0.3;
+    const balance = total - deposit;
+    if ($("#purchaseFinanceTotal")) $("#purchaseFinanceTotal").textContent = moneyCny(total);
+    if ($("#purchaseFinanceDeposit")) $("#purchaseFinanceDeposit").textContent = moneyCny(deposit);
+    if ($("#purchaseFinanceBalance")) $("#purchaseFinanceBalance").textContent = moneyCny(balance);
+  };
   const recalcPoTotals = () => {
     $$("[data-po-item-id]").forEach((row) => {
       const price = Number($(".po-edit-price", row)?.value || 0);
@@ -1008,6 +1045,7 @@ function bindPoActions(po, factoryMode) {
       updateFreightWeightCell(row, ".po-edit-specification", ".po-edit-qty", ".po-edit-freight-weight");
       if (target) target.textContent = moneyCny(readPoRowFreightWeightAmount(row) * price);
     });
+    updateFinanceSummary();
   };
   $$(".po-edit-specification, .po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
   recalcPoTotals();
