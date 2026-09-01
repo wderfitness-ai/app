@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import { get as blobGet, issueSignedToken, presignUrl, put as blobPut } from "@vercel/blob";
 import PDFDocument from "pdfkit";
 
@@ -308,6 +309,30 @@ function json(res, status, data, headers = {}) {
 function text(res, status, content, contentType = "text/plain; charset=utf-8", headers = {}) {
   res.writeHead(status, { "content-type": contentType, ...headers });
   res.end(content);
+}
+
+function preferredEncoding(req) {
+  const accepted = String(req.headers["accept-encoding"] || "");
+  if (accepted.includes("br")) return "br";
+  if (accepted.includes("gzip")) return "gzip";
+  return "";
+}
+
+function compressStaticBuffer(req, buffer, contentType) {
+  if (!/^(text\/|application\/javascript|application\/json)/i.test(contentType) || buffer.length < 1024) {
+    return { buffer, encoding: "" };
+  }
+  const encoding = preferredEncoding(req);
+  if (encoding === "br") {
+    return {
+      buffer: brotliCompressSync(buffer, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 }
+      }),
+      encoding
+    };
+  }
+  if (encoding === "gzip") return { buffer: gzipSync(buffer, { level: 6 }), encoding };
+  return { buffer, encoding: "" };
 }
 
 function requireAuth(user, res) {
@@ -2360,26 +2385,76 @@ function defaultQcItems() {
 }
 
 async function serveStatic(req, res, url) {
-  let filePath = url.pathname === "/" ? path.join(PUBLIC_DIR, "index.html") : path.join(PUBLIC_DIR, url.pathname);
-  if (!filePath.startsWith(PUBLIC_DIR)) return text(res, 403, "Forbidden");
+  const requestedPath = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
+  let filePath = path.normalize(path.join(PUBLIC_DIR, requestedPath));
+  if (!filePath.startsWith(`${PUBLIC_DIR}${path.sep}`) && filePath !== PUBLIC_DIR) return text(res, 403, "Forbidden");
   try {
     const st = await stat(filePath);
     if (st.isDirectory()) filePath = path.join(PUBLIC_DIR, "index.html");
     const ext = path.extname(filePath);
-    const types = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
-    text(res, 200, await readFile(filePath), types[ext] || "application/octet-stream");
+    const types = {
+      ".html": "text/html; charset=utf-8",
+      ".css": "text/css; charset=utf-8",
+      ".js": "application/javascript; charset=utf-8",
+      ".svg": "image/svg+xml",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".ttf": "font/ttf"
+    };
+    const contentType = types[ext] || "application/octet-stream";
+    const fileStat = await stat(filePath);
+    const etag = `"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`;
+    const isVersionedAsset = url.pathname.startsWith("/assets/") || ["/favicon.png", "/apple-touch-icon.png"].includes(url.pathname);
+    const cacheControl = ext === ".html"
+      ? "no-cache"
+      : isVersionedAsset
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=300, stale-while-revalidate=86400";
+    const baseHeaders = {
+      etag,
+      "cache-control": cacheControl,
+      "last-modified": fileStat.mtime.toUTCString(),
+      "x-content-type-options": "nosniff"
+    };
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, baseHeaders);
+      return res.end();
+    }
+    const originalBuffer = await readFile(filePath);
+    const compressed = compressStaticBuffer(req, originalBuffer, contentType);
+    const headers = {
+      ...baseHeaders,
+      "content-length": compressed.buffer.length,
+      vary: "Accept-Encoding"
+    };
+    if (compressed.encoding) headers["content-encoding"] = compressed.encoding;
+    if (req.method === "HEAD") {
+      res.writeHead(200, { "content-type": contentType, ...headers });
+      return res.end();
+    }
+    text(res, 200, compressed.buffer, contentType, headers);
   } catch {
-    text(res, 200, await readFile(path.join(PUBLIC_DIR, "index.html")), "text/html; charset=utf-8");
+    const indexBuffer = await readFile(path.join(PUBLIC_DIR, "index.html"));
+    const compressed = compressStaticBuffer(req, indexBuffer, "text/html; charset=utf-8");
+    const headers = {
+      "cache-control": "no-cache",
+      "content-length": compressed.buffer.length,
+      vary: "Accept-Encoding"
+    };
+    if (compressed.encoding) headers["content-encoding"] = compressed.encoding;
+    text(res, 200, compressed.buffer, "text/html; charset=utf-8", headers);
   }
 }
 
 async function appHandler(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (!url.pathname.startsWith("/api/")) return serveStatic(req, res, url);
     const db = await readDb();
     const user = await getUser(req, db);
-    if (url.pathname.startsWith("/api/")) return await handleApi(req, res, db, user, url);
-    return serveStatic(req, res, url);
+    return await handleApi(req, res, db, user, url);
   } catch (error) {
     console.error(error);
     json(res, error.statusCode || 500, { error: error.message || "Internal server error" });
