@@ -839,6 +839,25 @@ function moneyNumber(value) {
   return Number(String(value || "0").replace(/[$,]/g, ""));
 }
 
+function formatWeightValue(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "";
+  return Number.isInteger(numeric) ? String(numeric) : String(Number(numeric.toFixed(3)));
+}
+
+function calculateFreightWeight(raw = {}) {
+  const quantity = Number(raw.quantity ?? raw.pieces ?? 0);
+  const specText = String(raw.specification || raw.spec || "").replace(/；/g, ";");
+  const explicit = specText.match(/(?:重量|Freight Weight|Weight)\s*[:：]?\s*([\d,.]+)\s*(lb|lbs|kg)\b/i);
+  if (explicit) return `${formatWeightValue(Number(explicit[1].replace(/,/g, "")))} ${explicit[2].toLowerCase().replace("lbs", "lb")}`;
+  const unitWeight = specText.match(/(^|[^\d])([\d,.]+)\s*(lb|lbs|kg)\b/i);
+  if (unitWeight && quantity > 0) {
+    return `${formatWeightValue(Number(unitWeight[2].replace(/,/g, "")) * quantity)} ${unitWeight[3].toLowerCase().replace("lbs", "lb")}`;
+  }
+  const fallback = String(raw.freightWeight || raw.weight || "").trim();
+  return fallback;
+}
+
 function normalizePdfDate(value) {
   const match = String(value || "").match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
   if (!match) return today();
@@ -950,11 +969,16 @@ function parseImportedSalesOrderPdf(textContent) {
     }
     const quantity = Number(String(pieces).replace(/,/g, ""));
     const salesTotal = moneyNumber(amount);
+    const cleanSpec = String(spec || "-").trim() || "-";
+    const qtyLabel = `${orderQty} ${orderUnit}`;
+    const freightWeight = `${formatWeightValue(Number(String(weightLb).replace(/,/g, "")))} lb`;
     items.push({
       productName: bilingualProductName(productName, model),
       model,
-      specification: `${spec}; 订购数量 ${orderQty} ${orderUnit}; 重量 ${weightLb} lb; 报价单位 ${priceUnit}`,
+      specification: cleanSpec,
+      qtyLabel,
       quantity,
+      freightWeight: calculateFreightWeight({ specification: cleanSpec, quantity, freightWeight }),
       salesUnitPrice: quantity ? Number((salesTotal / quantity).toFixed(4)) : moneyNumber(unitPrice),
       salesTotal,
       logoRequirement: "按客户确认要求",
@@ -1929,7 +1953,7 @@ async function handleApi(req, res, db, user, url) {
           if (!isFactory(user)) {
             if ("specification" in raw) item.specification = raw.specification;
             if ("qtyLabel" in raw) item.qtyLabel = raw.qtyLabel;
-            if ("freightWeight" in raw) item.freightWeight = raw.freightWeight;
+            item.freightWeight = calculateFreightWeight({ ...item, ...raw, quantity });
             if ("logoRequirement" in raw) item.logoRequirement = raw.logoRequirement;
             if ("logoImageData" in raw) item.logoImageData = raw.logoImageData;
             if ("logoImageName" in raw) item.logoImageName = raw.logoImageName;
@@ -2102,7 +2126,9 @@ function salesItem(orderId, raw) {
     productName: bilingualProductName(raw.productName || raw.name || "", model),
     model,
     specification: raw.specification || "",
+    qtyLabel: raw.qtyLabel || raw.orderQty || `${quantity || 0} pcs`,
     quantity,
+    freightWeight: calculateFreightWeight(raw),
     salesUnitPrice: unit,
     salesTotal: Number(raw.salesTotal ?? quantity * unit),
     logoRequirement: raw.logoRequirement || "",
@@ -2124,7 +2150,7 @@ function poItem(orderId, raw) {
     specification: raw.specification || "",
     qtyLabel: raw.qtyLabel || raw.orderQty || `${quantity || 0} pcs`,
     quantity,
-    freightWeight: raw.freightWeight || raw.weight || "",
+    freightWeight: calculateFreightWeight(raw),
     purchaseUnitPrice: unit,
     purchaseTotal: Number(raw.purchaseTotal ?? quantity * unit),
     logoRequirement: raw.logoRequirement || "",

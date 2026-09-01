@@ -641,6 +641,7 @@ async function renderNewPurchaseOrder() {
     const price = Number($(".po-purchase-price", row)?.value || 0);
     const total = $(".po-line-total", row);
     if (total) total.textContent = moneyCny(quantity * price);
+    updateFreightWeightCell(row, ".po-specification", ".po-quantity", ".po-freight-weight");
   };
   const bindPoItemRows = () => {
     $$(".po-product", poItemsBody).forEach((select) => {
@@ -653,7 +654,7 @@ async function renderNewPurchaseOrder() {
         recalcNewPoRow(row);
       };
     });
-    $$(".po-quantity, .po-purchase-price", poItemsBody).forEach((input) => {
+    $$(".po-specification, .po-quantity, .po-purchase-price", poItemsBody).forEach((input) => {
       input.oninput = () => recalcNewPoRow(input.closest("tr"));
     });
     $$(".po-logo-file", poItemsBody).forEach((input) => {
@@ -678,8 +679,10 @@ async function renderNewPurchaseOrder() {
     poItemsBody.insertAdjacentHTML("beforeend", poItemRowTemplate(products.items));
     bindPoItemRows();
     if (newPoBulkLogo) applyPoLogoToRows([poItemsBody.lastElementChild], newPoBulkLogo);
+    recalcNewPoRow(poItemsBody.lastElementChild);
   });
   bindPoItemRows();
+  $$("#poItemsBody tr").forEach(recalcNewPoRow);
   $(".bulk-po-logo-file").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -707,7 +710,7 @@ async function renderNewPurchaseOrder() {
         specification: $(".po-specification", row).value,
         qtyLabel: $(".po-qty-label", row).value,
         quantity,
-        freightWeight: $(".po-freight-weight", row).value,
+        freightWeight: calculateFreightWeight($(".po-specification", row).value, quantity),
         purchaseUnitPrice,
         purchaseTotal: quantity * purchaseUnitPrice,
         logoRequirement: $(".po-logo", row).value,
@@ -746,7 +749,7 @@ function poItemRowTemplate(products) {
     <td><input class="input po-specification" value="按确认样生产"></td>
     <td><input class="input po-qty-label" value="1 pc"></td>
     <td><input class="input po-quantity" type="number" min="1" value="1"></td>
-    <td><input class="input po-freight-weight" value=""></td>
+    <td><input class="input po-freight-weight" value="" readonly title="根据规格和件数自动核算"></td>
     <td><input class="input po-purchase-price" type="number" step="0.01" min="0" value="${products[0]?.defaultPurchasePrice || 1}"></td>
     <td class="po-line-total">${moneyCny(products[0]?.defaultPurchasePrice || 1)}</td>
     <td class="po-logo-cell"><span class="muted po-logo-empty">未上传</span><input class="input po-logo-file" type="file" accept="image/*"><input class="input po-logo" type="hidden" value="按确认稿"></td>
@@ -882,7 +885,7 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
         <td>${factoryMode ? displayValue(item.specification) : `<input class="input po-edit-specification" value="${escapeAttr(item.specification || "")}">`}</td>
         <td>${factoryMode ? displayValue(item.qtyLabel || `${Number(item.quantity || 0)} pcs`) : `<input class="input po-edit-qty-label" value="${escapeAttr(item.qtyLabel || `${Number(item.quantity || 0)} pcs`)}">`}</td>
         <td>${factoryMode ? `<strong>${Number(item.quantity || 0)}</strong>` : `<input class="input po-edit-qty" type="number" min="0" step="1" value="${Number(item.quantity || 0)}">`}</td>
-        <td>${factoryMode ? displayValue(item.freightWeight) : `<input class="input po-edit-freight-weight" value="${escapeAttr(item.freightWeight || "")}">`}</td>
+        <td>${factoryMode ? displayValue(item.freightWeight) : `<input class="input po-edit-freight-weight" value="${escapeAttr(item.freightWeight || "")}" readonly title="根据规格和件数自动核算">`}</td>
         <td><input class="input po-edit-price" type="number" min="0" step="0.01" value="${Number(item.purchaseUnitPrice || 0)}"></td>
         <td class="po-edit-total">${moneyCny(item.purchaseTotal || 0)}</td>
         <td class="po-logo-cell">
@@ -903,9 +906,11 @@ function bindPoActions(po, factoryMode) {
       const price = Number($(".po-edit-price", row)?.value || 0);
       const target = $(".po-edit-total", row);
       if (target) target.textContent = moneyCny(qty * price);
+      updateFreightWeightCell(row, ".po-edit-specification", ".po-edit-qty", ".po-edit-freight-weight");
     });
   };
-  $$(".po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
+  $$(".po-edit-specification, .po-edit-qty, .po-edit-price").forEach((input) => input.addEventListener("input", recalcPoTotals));
+  recalcPoTotals();
   $(".bulk-edit-po-logo-file")?.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -936,7 +941,7 @@ function bindPoActions(po, factoryMode) {
       if (!factoryMode) {
         item.specification = $(".po-edit-specification", row)?.value || "";
         item.qtyLabel = $(".po-edit-qty-label", row)?.value || "";
-        item.freightWeight = $(".po-edit-freight-weight", row)?.value || "";
+        item.freightWeight = calculateFreightWeight(item.specification, item.quantity);
       }
       if (row.dataset.logoImageData) {
         item.logoImageData = row.dataset.logoImageData;
@@ -1338,6 +1343,28 @@ function moneyUsd(value) {
 
 function moneyCny(value) {
   return money(value, "¥");
+}
+
+function formatWeightValue(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "";
+  return Number.isInteger(numeric) ? String(numeric) : String(Number(numeric.toFixed(3)));
+}
+
+function calculateFreightWeight(specification, pieces) {
+  const qty = Number(pieces || 0);
+  const spec = String(specification || "").replace(/；/g, ";");
+  const explicit = spec.match(/(?:重量|Freight Weight|Weight)\s*[:：]?\s*([\d,.]+)\s*(lb|lbs|kg)\b/i);
+  if (explicit) return `${formatWeightValue(Number(explicit[1].replace(/,/g, "")))} ${explicit[2].toLowerCase().replace("lbs", "lb")}`;
+  const unitWeight = spec.match(/(^|[^\d])([\d,.]+)\s*(lb|lbs|kg)\b/i);
+  if (!unitWeight || qty <= 0) return "";
+  return `${formatWeightValue(Number(unitWeight[2].replace(/,/g, "")) * qty)} ${unitWeight[3].toLowerCase().replace("lbs", "lb")}`;
+}
+
+function updateFreightWeightCell(row, specSelector, qtySelector, targetSelector) {
+  const target = $(targetSelector, row);
+  if (!target) return;
+  target.value = calculateFreightWeight($(specSelector, row)?.value, $(qtySelector, row)?.value);
 }
 
 function future(days) {
