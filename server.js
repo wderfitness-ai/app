@@ -953,6 +953,41 @@ function addDays(dateValue, days) {
   return d.toISOString().slice(0, 10);
 }
 
+function cleanImportedCustomerLine(line) {
+  return String(line || "")
+    .replace(/^Wder Fitness Equipment Manufacturer\s*/i, "")
+    .replace(/^Abner Zhu\s*/i, "")
+    .replace(/^\+?\d[\d\s-]+\s*/, "")
+    .replace(/^wderfitness@gmail\.com\s*/i, "")
+    .trim();
+}
+
+function extractImportedCustomerValues(lines) {
+  const inlineCustomer = lines.find((line) => /^Customer\s*[:：]\s*\S+/i.test(line) || /^Customer\s+\S+/i.test(line));
+  if (inlineCustomer) {
+    const inlineName = cleanImportedCustomerLine(inlineCustomer.replace(/^Customer\s*[:：]?\s*/i, ""));
+    if (inlineName) return [inlineName];
+  }
+
+  const headingIndex = lines.findIndex((line) => /^Customer$/i.test(line));
+  const nextHeadingIndex = headingIndex >= 0
+    ? lines.findIndex((line, index) => index > headingIndex && /^(Products|Terms|Product Totals|Item Details|Notes)$/i.test(line))
+    : -1;
+  if (headingIndex >= 0) {
+    const explicitBlock = lines.slice(headingIndex + 1, nextHeadingIndex > headingIndex ? nextHeadingIndex : undefined)
+      .map(cleanImportedCustomerLine)
+      .filter(Boolean);
+    if (explicitBlock.length) return explicitBlock;
+  }
+
+  const supplierCustomerStart = lines.findIndex((line) => line === "Supplier Customer");
+  const productsTermsStart = lines.findIndex((line) => line === "Products Terms");
+  const fallbackBlock = supplierCustomerStart >= 0 && productsTermsStart > supplierCustomerStart
+    ? lines.slice(supplierCustomerStart + 1, productsTermsStart)
+    : [];
+  return fallbackBlock.map(cleanImportedCustomerLine).filter(Boolean);
+}
+
 function parseImportedSalesOrderPdf(textContent) {
   const textValue = String(textContent || "").replace(/\r/g, "");
   const lines = textValue.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -966,18 +1001,7 @@ function parseImportedSalesOrderPdf(textContent) {
   const freight = moneyNumber(textValue.match(/Product amount\s+DDP freight\s+Grand total\s+[\d,]+\s+[\d,]+\s+lb\s+\$[\d,.]+\s+(\$[\d,.]+)/i)?.[1]);
   const grandTotal = moneyNumber(textValue.match(/Total order amount:\s*(\$[\d,.]+)/i)?.[1]);
 
-  const supplierCustomerStart = lines.findIndex((line) => line === "Supplier Customer");
-  const productsTermsStart = lines.findIndex((line) => line === "Products Terms");
-  const customerBlock = supplierCustomerStart >= 0 && productsTermsStart > supplierCustomerStart
-    ? lines.slice(supplierCustomerStart + 1, productsTermsStart)
-    : [];
-  const customerValues = customerBlock.map((line) => line
-    .replace(/^Wder Fitness Equipment Manufacturer\s*/i, "")
-    .replace(/^Abner Zhu\s*/i, "")
-    .replace(/^\+?\d[\d\s-]+\s*/, "")
-    .replace(/^wderfitness@gmail\.com\s*/i, "")
-    .trim()
-  ).filter(Boolean);
+  const customerValues = extractImportedCustomerValues(lines);
   const customerName = customerValues[0] || "Imported Customer";
   const country = customerValues.find((line) => /^United States$/i.test(line)) || customerValues.at(-1) || "";
   const address = customerValues.slice(1).filter((line) => line !== country).join(", ");
