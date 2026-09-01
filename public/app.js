@@ -408,21 +408,45 @@ function bindSalesOrderImport() {
   $("#importSalesOrderPdf")?.addEventListener("click", async () => {
     const file = $("#salesOrderPdf").files[0];
     if (!file) return alert("请选择客户订单 PDF");
-    $("#importOrderResult").innerHTML = `<p class="notice">正在识别 PDF 并生成客户订单...</p>`;
+    $("#importOrderResult").innerHTML = `<p class="notice">正在上传并识别 PDF，请稍候...</p>`;
     try {
-      const result = await api("/api/import-sales-order", {
-        method: "POST",
-        body: JSON.stringify({
-          fileName: file.name,
-          contentBase64: await toBase64(file)
-        })
-      });
+      const result = await importSalesOrderPdfFile(file);
       $("#importOrderResult").innerHTML = `<p class="notice">已识别 ${result.parsed.itemCount} 条产品明细，订单号 ${result.order.orderNo}。</p>`;
       go(`/admin/orders/${result.order.id}`);
     } catch (error) {
       $("#importOrderResult").innerHTML = `<p class="notice">导入失败：${error.message}</p>`;
     }
   });
+}
+
+async function importSalesOrderPdfFile(file) {
+  try {
+    const upload = await api("/api/blob-upload-url", {
+      method: "POST",
+      body: JSON.stringify({ fileName: file.name, contentType: file.type || "application/pdf" })
+    });
+    const uploaded = await fetch(upload.presignedUrl, {
+      method: "PUT",
+      headers: { "content-type": file.type || "application/pdf" },
+      body: file
+    });
+    if (!uploaded.ok) throw new Error(`PDF 上传失败：${uploaded.status}`);
+    const uploadedData = await uploaded.json().catch(() => ({}));
+    return api("/api/import-sales-order", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: file.name,
+        blobUrl: uploadedData.url || "",
+        blobPath: uploadedData.pathname || upload.pathname
+      })
+    });
+  } catch (error) {
+    if (file.size > 4_000_000) throw error;
+    return api("/api/import-sales-order", {
+      method: "POST",
+      body: JSON.stringify({ fileName: file.name, contentBase64: await toBase64(file) })
+    });
+  }
 }
 
 async function loadSalesOrders() {

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { get as blobGet, put as blobPut } from "@vercel/blob";
+import { get as blobGet, issueSignedToken, presignUrl, put as blobPut } from "@vercel/blob";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -138,7 +138,8 @@ async function readDb() {
   if (USE_BLOB_DB) {
     const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false });
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
-    if (!stored || ensureBootstrapAdmin(db)) await writeDb(db);
+    const changed = ensureBootstrapAdmin(db);
+    if (!stored || changed) await writeDb(db);
     return db;
   }
   await ensureDataFile();
@@ -557,9 +558,23 @@ function structuredPdf(title, document, options = {}) {
 }
 
 async function extractPdfText(contentBase64) {
+  return extractPdfTextFromBuffer(Buffer.from(contentBase64, "base64"));
+}
+
+async function extractPdfTextFromBuffer(buffer) {
   const pdfParse = require("pdf-parse/lib/pdf-parse.js");
-  const result = await pdfParse(Buffer.from(contentBase64, "base64"));
+  const result = await pdfParse(buffer);
   return { pages: result.numpages || result.numrender || 0, text: result.text || "" };
+}
+
+async function readBlobBuffer(urlOrPathname) {
+  const stored = await blobGet(urlOrPathname, { access: "private", useCache: false });
+  if (!stored?.stream) {
+    const error = new Error("上传文件未找到，请重新上传后再导入。");
+    error.statusCode = 404;
+    throw error;
+  }
+  return Buffer.from(await new Response(stored.stream).arrayBuffer());
 }
 
 const PRODUCT_ZH = {
@@ -1273,6 +1288,34 @@ async function handleApi(req, res, db, user, url) {
   if (resource === "session" && method === "GET") return json(res, 200, { user: user ? publicUser(user) : null, orderStatuses: ORDER_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })) });
   if (!requireAuth(user, res)) return;
 
+  if (resource === "blob-upload-url" && method === "POST") {
+    const body = await bodyJson(req);
+    if (!USE_BLOB_DB) return json(res, 501, { error: "当前环境未配置文件直传存储，请使用较小文件或联系管理员配置 Blob。"});
+    const rawFileName = String(body.fileName || "").trim();
+    const contentType = String(body.contentType || "application/octet-stream").trim();
+    if (!rawFileName) return json(res, 400, { error: "缺少文件名" });
+    const safeFileName = rawFileName.replace(/[^\w.\- \u4e00-\u9fa5]/g, "_");
+    const pathname = `uploads/${new Date().toISOString().slice(0, 10)}/${crypto.randomBytes(8).toString("hex")}-${safeFileName}`;
+    const validUntil = Date.now() + 10 * 60 * 1000;
+    const token = await issueSignedToken({
+      pathname,
+      operations: ["put", "get"],
+      validUntil,
+      allowedContentTypes: ["application/pdf", "application/octet-stream"],
+      maximumSizeInBytes: 40 * 1024 * 1024
+    });
+    const { presignedUrl } = await presignUrl(token, {
+      access: "private",
+      operation: "put",
+      pathname,
+      validUntil,
+      allowedContentTypes: ["application/pdf", "application/octet-stream"],
+      maximumSizeInBytes: 40 * 1024 * 1024,
+      allowOverwrite: false
+    });
+    return json(res, 200, { pathname, presignedUrl, fileName: safeFileName });
+  }
+
   if (resource === "users") {
     if (method === "GET") {
       if (!requireRole(user, res, [ROLE.ADMIN])) return;
@@ -1376,10 +1419,19 @@ async function handleApi(req, res, db, user, url) {
   if (resource === "import-sales-order" && method === "POST") {
     if (!requireRole(user, res, [ROLE.ADMIN, ROLE.SALES])) return;
     const body = await bodyJson(req);
-    if (!body.contentBase64 || !body.fileName) return json(res, 400, { error: "请上传客户订单 PDF 文件" });
+    const blobRef = body.blobUrl || body.blobPath || "";
+    if ((!body.contentBase64 && !blobRef) || !body.fileName) return json(res, 400, { error: "请上传客户订单 PDF 文件" });
     const fileOrderNo = extractOrderNoFromFileName(body.fileName);
-    const extracted = await extractPdfText(body.contentBase64);
-    const parsed = parseImportedSalesOrderPdf(extracted.text);
+    let pdfBuffer;
+    let extracted;
+    let parsed;
+    try {
+      pdfBuffer = blobRef ? await readBlobBuffer(blobRef) : Buffer.from(body.contentBase64, "base64");
+      extracted = await extractPdfTextFromBuffer(pdfBuffer);
+      parsed = parseImportedSalesOrderPdf(extracted.text);
+    } catch (error) {
+      return json(res, error.statusCode || 400, { error: `PDF 识别失败：${error.message}` });
+    }
     const preferredOrderNo = fileOrderNo || parsed.order.orderNo || nextNo(db.sales_orders, "SO");
     if (db.sales_orders.some((item) => item.orderNo === preferredOrderNo)) {
       return json(res, 409, { error: `订单号 ${preferredOrderNo} 已存在，请确认上传文件是否重复导入。` });
@@ -1402,8 +1454,8 @@ async function handleApi(req, res, db, user, url) {
     const orderDir = path.join(UPLOAD_DIR, order.orderNo.replace(/[^a-zA-Z0-9_-]/g, "_"));
     await mkdir(orderDir, { recursive: true });
     const safeFileName = String(body.fileName).replace(/[^\w.\- \u4e00-\u9fa5]/g, "_");
-    const storedPath = path.join(orderDir, safeFileName);
-    await writeFile(storedPath, Buffer.from(body.contentBase64, "base64"));
+    const storedPath = blobRef ? blobRef : path.join(orderDir, safeFileName);
+    if (!blobRef) await writeFile(storedPath, pdfBuffer);
     db.order_files.push({
       id: id("file"),
       salesOrderId: order.id,
@@ -1411,6 +1463,7 @@ async function handleApi(req, res, db, user, url) {
       fileType: "Customer Quotation",
       fileName: safeFileName,
       path: storedPath,
+      storage: blobRef ? "blob" : "local",
       uploadedBy: user.id,
       uploadedByName: user.name,
       createdAt: now()
