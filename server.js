@@ -73,6 +73,12 @@ const ORDER_STATUS = [
   "Cancelled"
 ];
 
+const PURCHASE_PRODUCTION_STATUS = [
+  "Factory Order Placed",
+  "Mass Production",
+  "Production Completed"
+];
+
 const STATUS_ZH = {
   "Inquiry Received": "询盘中",
   Quoted: "已报价",
@@ -82,9 +88,10 @@ const STATUS_ZH = {
   "Factory Confirmed": "工厂已确认",
   "Logo / Artwork Confirmed": "Logo或设计已确认",
   "Sample / Pre-production Confirmed": "产前样已确认",
-  "Mass Production": "批量生产中",
+  "Mass Production": "生产中",
   "Production Inspection": "生产质检中",
   "Packing Inspection": "包装质检中",
+  "Production Completed": "生产完成",
   "Balance Payment Pending": "待收尾款",
   "Ready to Ship": "待发货",
   Shipped: "已发货",
@@ -740,8 +747,8 @@ function createReminderRecords(db) {
   for (const po of db.purchase_orders.filter((item) => !isDeleted(item))) {
     const ageDays = (todayDate - new Date(`${po.orderDate}T00:00:00+08:00`)) / 86400000;
     if (po.factoryConfirmStatus !== "Confirmed" && ageDays > 2) reminders.push(rem("工厂超过2天未确认订单", "high", po.salesOrderId, po.id));
-    if (po.qcStatus !== "Passed" && ["Production Inspection", "Packing Inspection", "Ready to Ship"].includes(po.productionStatus)) reminders.push(rem("质检未完成", "medium", po.salesOrderId, po.id));
-    if (po.factoryPaymentStatus !== "Paid" && ["Ready to Ship", "Shipped"].includes(po.productionStatus)) reminders.push(rem("工厂尾款未付", "medium", po.salesOrderId, po.id));
+    if (po.qcStatus !== "Passed" && ["Mass Production", "Production Completed"].includes(po.productionStatus)) reminders.push(rem("质检未完成", "medium", po.salesOrderId, po.id));
+    if (po.factoryPaymentStatus !== "Paid" && po.productionStatus === "Production Completed") reminders.push(rem("工厂尾款未付", "medium", po.salesOrderId, po.id));
   }
   for (const so of db.sales_orders.filter((item) => !isDeleted(item))) {
     const daysLeft = (new Date(`${so.expectedDeliveryDate}T00:00:00+08:00`) - todayDate) / 86400000;
@@ -1890,7 +1897,7 @@ async function handleApi(req, res, db, user, url) {
     return json(res, 200, { ok: true }, { "set-cookie": "session=; Path=/; Max-Age=0" });
   }
 
-  if (resource === "session" && method === "GET") return json(res, 200, { user: user ? publicUser(user) : null, orderStatuses: ORDER_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })) });
+  if (resource === "session" && method === "GET") return json(res, 200, { user: user ? publicUser(user) : null, orderStatuses: ORDER_STATUS, purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })) });
   if (!requireAuth(user, res)) return;
 
   if (resource === "notifications") {
@@ -2032,7 +2039,7 @@ async function handleApi(req, res, db, user, url) {
           factoryPending: visiblePo.filter((o) => o.factoryConfirmStatus !== "Confirmed").length,
           producing: visiblePo.filter((o) => o.productionStatus === "Mass Production").length,
           qcPending: visiblePo.filter((o) => o.qcStatus !== "Passed").length,
-          readyToShip: visiblePo.filter((o) => o.productionStatus === "Ready to Ship").length,
+          readyToShip: visiblePo.filter((o) => o.productionStatus === "Production Completed").length,
           shipped: visiblePo.filter((o) => o.productionStatus === "Shipped").length,
           purchaseTotalCny,
           monthPurchaseCny
@@ -2268,7 +2275,7 @@ async function handleApi(req, res, db, user, url) {
         factoryDeliveryDate: body.factoryDeliveryDate || so?.expectedDeliveryDate || today(30),
         factoryPaymentStatus: body.factoryPaymentStatus || "Unpaid",
         factoryConfirmStatus: body.factoryConfirmStatus || "Pending",
-        productionStatus: body.productionStatus || "Factory Order Placed",
+        productionStatus: PURCHASE_PRODUCTION_STATUS.includes(body.productionStatus) ? body.productionStatus : "Factory Order Placed",
         qcStatus: body.qcStatus || "Not Started",
         remark: body.remark || "",
         createdAt: now(),
@@ -2312,6 +2319,7 @@ async function handleApi(req, res, db, user, url) {
       if (!isFactory(user) && ![ROLE.ADMIN, ROLE.SALES, ROLE.MERCH, ROLE.FINANCE].includes(user.role)) return json(res, 403, { error: "Forbidden" });
       const before = { ...po };
       const body = await bodyJson(req);
+      if ("productionStatus" in body && !PURCHASE_PRODUCTION_STATUS.includes(body.productionStatus)) return json(res, 400, { error: "采购单生产状态只能选择：已安排工厂、生产中、生产完成" });
       const oldStatus = po.productionStatus;
       const oldFactoryDeliveryDate = po.factoryDeliveryDate;
       const allowedKeys = isFactory(user)

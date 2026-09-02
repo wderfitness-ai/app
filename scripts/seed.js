@@ -60,8 +60,8 @@ const sales_order_items = [
 
 const purchase_orders = [
   { id: "po-1", poNo: "SO-20260708-001", salesOrderId: "so-1", factoryId: "fac-1", orderDate: today(-10), factoryDeliveryDate: today(8), factoryPaymentStatus: "Deposit Paid", factoryConfirmStatus: "Confirmed", productionStatus: "Mass Production", qcStatus: "Not Started", remark: "每周五发送生产图片。", createdAt: now(), updatedAt: now() },
-  { id: "po-2", poNo: "SO-20260708-002", salesOrderId: "so-2", factoryId: "fac-2", orderDate: today(-18), factoryDeliveryDate: today(2), factoryPaymentStatus: "Balance Pending", factoryConfirmStatus: "Confirmed", productionStatus: "Packing Inspection", qcStatus: "Need Rework", remark: "椅子收纳袋车线需要返工。", createdAt: now(), updatedAt: now() },
-  { id: "po-3", poNo: "SO-20260708-003", salesOrderId: "so-3", factoryId: "fac-1", orderDate: today(-6), factoryDeliveryDate: today(20), factoryPaymentStatus: "Deposit Paid", factoryConfirmStatus: "Confirmed", productionStatus: "Factory Confirmed", qcStatus: "Not Started", remark: "等待彩盒设计稿。", createdAt: now(), updatedAt: now() }
+  { id: "po-2", poNo: "SO-20260708-002", salesOrderId: "so-2", factoryId: "fac-2", orderDate: today(-18), factoryDeliveryDate: today(2), factoryPaymentStatus: "Balance Pending", factoryConfirmStatus: "Confirmed", productionStatus: "Production Completed", qcStatus: "Need Rework", remark: "椅子收纳袋车线需要返工。", createdAt: now(), updatedAt: now() },
+  { id: "po-3", poNo: "SO-20260708-003", salesOrderId: "so-3", factoryId: "fac-1", orderDate: today(-6), factoryDeliveryDate: today(20), factoryPaymentStatus: "Deposit Paid", factoryConfirmStatus: "Confirmed", productionStatus: "Factory Order Placed", qcStatus: "Not Started", remark: "等待彩盒设计稿。", createdAt: now(), updatedAt: now() }
 ];
 
 const purchase_order_items = [
@@ -90,8 +90,8 @@ const payments = [
 const order_timeline = [
   { id: "tl-1", orderId: "so-1", orderType: "sales_order", actorId: "user-sales", actorName: "销售小苏", createdAt: now(), oldStatus: "", newStatus: "Customer Confirmed", note: "客户确认形式发票" },
   { id: "tl-2", orderId: "so-1", orderType: "sales_order", actorId: "user-finance", actorName: "财务小方", createdAt: now(), oldStatus: "Customer Confirmed", newStatus: "Deposit Received", note: "收到定金" },
-  { id: "tl-3", orderId: "po-1", orderType: "purchase_order", actorId: "user-factory-a", actorName: "亮彩包装工厂账号", createdAt: now(), oldStatus: "Factory Confirmed", newStatus: "Mass Production", note: "开始批量生产" },
-  { id: "tl-4", orderId: "po-2", orderType: "purchase_order", actorId: "user-merch", actorName: "跟单小明", createdAt: now(), oldStatus: "Packing Inspection", newStatus: "Need Rework", note: "质检发现包装返工项" }
+  { id: "tl-3", orderId: "po-1", orderType: "purchase_order", actorId: "user-factory-a", actorName: "亮彩包装工厂账号", createdAt: now(), oldStatus: "Factory Order Placed", newStatus: "Mass Production", note: "开始生产" },
+  { id: "tl-4", orderId: "po-2", orderType: "purchase_order", actorId: "user-merch", actorName: "跟单小明", createdAt: now(), oldStatus: "Mass Production", newStatus: "Production Completed", note: "生产完成，等待质检复核" }
 ];
 
 const db = {

@@ -4,6 +4,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = {
   user: null,
   orderStatuses: [],
+  purchaseProductionStatuses: [],
   statusZh: {},
   roles: [],
   factories: [],
@@ -51,9 +52,10 @@ const STATUS_LABELS = {
   "Factory Confirmed": "工厂已确认",
   "Logo / Artwork Confirmed": "Logo或设计已确认",
   "Sample / Pre-production Confirmed": "产前样已确认",
-  "Mass Production": "批量生产中",
+  "Mass Production": "生产中",
   "Production Inspection": "生产质检中",
   "Packing Inspection": "包装质检中",
+  "Production Completed": "生产完成",
   "Balance Payment Pending": "待收尾款",
   "Ready to Ship": "待发货",
   Shipped: "已发货",
@@ -144,6 +146,7 @@ async function boot() {
     const session = await api("/api/session");
     state.user = session.user;
     state.orderStatuses = session.orderStatuses || [];
+    state.purchaseProductionStatuses = session.purchaseProductionStatuses || [];
     state.statusZh = session.statusZh || {};
     state.roles = session.roles || [];
     state.factories = session.factories || [];
@@ -423,6 +426,7 @@ async function render() {
     const session = await api("/api/session");
     state.user = session.user;
     state.orderStatuses = session.orderStatuses || [];
+    state.purchaseProductionStatuses = session.purchaseProductionStatuses || [];
     state.statusZh = session.statusZh || {};
     state.roles = session.roles || [];
     state.factories = session.factories || [];
@@ -992,12 +996,14 @@ async function renderPurchaseOrderModal(id) {
 function purchaseOrderView(po, factoryMode) {
   const financeColumns = po.items.some((item) => item.purchaseUnitPrice !== undefined);
   const canEditPayment = canEditPurchasePaymentStatus();
+  const poStatuses = state.purchaseProductionStatuses?.length ? state.purchaseProductionStatuses : ["Factory Order Placed", "Mass Production", "Production Completed"];
+  const statusOptions = poStatuses.includes(po.productionStatus) ? poStatuses : [po.productionStatus, ...poStatuses];
   return `
     <section class="panel">
       <div class="toolbar">
         <div>${tag(po.productionStatus, po.productionStatus)} ${tag(po.qcStatus, po.qcStatus)}</div>
         <div class="filters">
-          <select class="select" id="poStatus">${state.orderStatuses.map((s) => `<option value="${s}" ${s === po.productionStatus ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
+          <select class="select" id="poStatus">${statusOptions.map((s) => `<option value="${s}" ${s === po.productionStatus ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
           <button class="btn primary" id="savePoStatus">保存交期/状态/单价</button>
           ${state.user.role === "Admin" && !factoryMode ? `<button class="btn danger" id="deletePurchaseOrder">归档采购单</button>` : ""}
         </div>
