@@ -941,7 +941,7 @@ async function renderSalesOrderDetail(id) {
         ${field("定金/尾款（USD）", `${moneyUsd(order.depositAmount)} / ${moneyUsd(order.balanceAmount)}`)}
         ${field("运费/其他费用（USD）", `${moneyUsd(order.freight)} / ${moneyUsd(order.otherFees)}`)}
       </div>
-      ${order.profit ? `<h2>利润核算</h2><div class="detail-grid">${field("销售总额（USD）", moneyUsd(order.profit.salesTotal))}${field("采购成本（CNY）", moneyCny(order.profit.purchaseCostCny))}${field("采购折算（USD）", moneyUsd(order.profit.purchaseCost))}${field("预估利润（USD）", moneyUsd(order.profit.estimatedProfit))}${field("利润率", `${order.profit.profitRate}%`)}</div>` : `<p class="notice">当前角色无权查看工厂采购成本和利润。</p>`}
+      ${order.profit ? `<h2>利润核算</h2><div class="detail-grid">${field("产品销售额（USD）", moneyUsd(order.profit.salesTotal))}${field("DDP运费收入（USD）", moneyUsd(order.profit.ddpFreightRevenue || 0))}${field("销售总额含DDP运费（USD）", moneyUsd(order.profit.grossSalesTotal || order.profit.salesTotal))}${field("采购成本（CNY）", moneyCny(order.profit.purchaseCostCny))}${field("采购折算（USD）", moneyUsd(order.profit.purchaseCost))}${field("预估利润（USD）", moneyUsd(order.profit.estimatedProfit))}${field("利润率", `${order.profit.profitRate}%`)}</div>` : `<p class="notice">当前角色无权查看工厂采购成本和利润。</p>`}
       <h2>产品明细</h2>${simpleTable(order.items, ["productName", "model", "quantity", "salesUnitPrice", "salesTotal", "logoRequirement", "colorRequirement"], ["产品名称（中文 / English）", "型号", "数量", "销售单价（USD）", "销售总价（USD）", "标志要求", "颜色"], (row, key) => ["salesUnitPrice", "salesTotal"].includes(key) ? moneyUsd(row[key]) : displayValue(row[key]))}
     </section>
     <section class="split">

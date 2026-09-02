@@ -601,11 +601,15 @@ function profitForSalesOrder(db, salesOrder) {
   const purchaseCostCny = purchaseOrders.reduce((total, po) => total + sum(poItems(db, po.id), "purchaseTotal"), 0);
   const purchaseCost = CNY_PER_USD ? purchaseCostCny / CNY_PER_USD : purchaseCostCny;
   const salesTotal = sum(salesItems(db, salesOrder.id), "salesTotal");
+  const ddpFreightRevenue = String(salesOrder.deliveryTerm || "").toUpperCase() === "DDP" ? Number(salesOrder.freight || 0) : 0;
+  const grossSalesTotal = salesTotal + ddpFreightRevenue;
   const freight = Number(salesOrder.freight || 0);
   const otherCost = Number(salesOrder.otherFees || 0);
-  const profit = salesTotal - purchaseCost - freight - otherCost;
+  const profit = grossSalesTotal - purchaseCost - freight - otherCost;
   return {
     salesTotal,
+    ddpFreightRevenue,
+    grossSalesTotal,
     purchaseCostCny,
     purchaseCost,
     exchangeRateCnyPerUsd: CNY_PER_USD,
@@ -613,7 +617,7 @@ function profitForSalesOrder(db, salesOrder) {
     otherCost,
     estimatedProfit: profit,
     actualProfit: profit,
-    profitRate: salesTotal ? Number(((profit / salesTotal) * 100).toFixed(2)) : 0
+    profitRate: grossSalesTotal ? Number(((profit / grossSalesTotal) * 100).toFixed(2)) : 0
   };
 }
 
@@ -2052,7 +2056,7 @@ async function handleApi(req, res, db, user, url) {
     const monthSales = visibleSales.filter((so) => so.orderDate.startsWith(month));
     const finance = monthSales.reduce((acc, so) => {
       const p = profitForSalesOrder(db, so);
-      acc.sales += p.salesTotal;
+      acc.sales += p.grossSalesTotal;
       acc.purchase += p.purchaseCostCny;
       acc.profit += p.estimatedProfit;
       return acc;
@@ -2538,7 +2542,7 @@ async function handleApi(req, res, db, user, url) {
     const type = url.searchParams.get("type");
     if (type === "profit" && !canViewFinance(user)) return json(res, 403, { error: "Forbidden" });
     if (type === "sales-orders") {
-      const rows = db.sales_orders.filter((so) => !isDeleted(so)).map((so) => ({ orderNo: so.orderNo, customer: db.customers.find((c) => c.id === so.customerId)?.company || "", status: so.status, paymentStatus: so.paymentStatus, totalUsd: profitForSalesOrder(db, so).salesTotal }));
+      const rows = db.sales_orders.filter((so) => !isDeleted(so)).map((so) => ({ orderNo: so.orderNo, customer: db.customers.find((c) => c.id === so.customerId)?.company || "", status: so.status, paymentStatus: so.paymentStatus, totalUsd: profitForSalesOrder(db, so).grossSalesTotal }));
       return text(res, 200, csv(rows), "text/csv; charset=utf-8", { "content-disposition": "attachment; filename=sales-orders.csv" });
     }
     if (type === "purchase-orders") {
@@ -2548,7 +2552,7 @@ async function handleApi(req, res, db, user, url) {
     if (type === "profit") {
       const rows = db.sales_orders.filter((so) => !isDeleted(so)).map((so) => {
         const p = profitForSalesOrder(db, so);
-        return { orderNo: so.orderNo, salesTotalUsd: p.salesTotal, purchaseCostCny: p.purchaseCostCny, purchaseCostUsd: p.purchaseCost, freightUsd: p.freight, otherCostUsd: p.otherCost, estimatedProfitUsd: p.estimatedProfit, profitRate: p.profitRate, exchangeRateCnyPerUsd: p.exchangeRateCnyPerUsd };
+        return { orderNo: so.orderNo, productSalesUsd: p.salesTotal, ddpFreightRevenueUsd: p.ddpFreightRevenue, salesTotalUsd: p.grossSalesTotal, purchaseCostCny: p.purchaseCostCny, purchaseCostUsd: p.purchaseCost, freightUsd: p.freight, otherCostUsd: p.otherCost, estimatedProfitUsd: p.estimatedProfit, profitRate: p.profitRate, exchangeRateCnyPerUsd: p.exchangeRateCnyPerUsd };
       });
       return text(res, 200, csv(rows), "text/csv; charset=utf-8", { "content-disposition": "attachment; filename=profit-report.csv" });
     }
