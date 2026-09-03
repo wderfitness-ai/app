@@ -501,6 +501,81 @@ a {
   margin: 0 0 10px;
 }
 
+.delivery-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.delivery-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+}
+
+.delivery-badge.blue,
+.delivery-date.blue {
+  background: var(--tag-blue-bg);
+  color: var(--blue);
+}
+
+.delivery-badge.yellow,
+.delivery-date.yellow {
+  background: var(--tag-yellow-bg);
+  color: var(--yellow);
+}
+
+.delivery-badge.red,
+.delivery-date.red {
+  background: var(--tag-red-bg);
+  color: var(--red);
+}
+
+.delivery-badge.green,
+.delivery-date.green {
+  background: var(--tag-green-bg);
+  color: var(--green);
+}
+
+.delivery-date {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-weight: 800;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+}
+
+.delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 360px;
+}
+
+.delivery-adjust {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.delivery-adjust .input {
+  width: 145px;
+  min-height: 30px;
+  padding: 5px 8px;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

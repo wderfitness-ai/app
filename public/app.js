@@ -20,6 +20,7 @@ const navAdmin = [
   ["/admin/sales-orders", "客户订单"],
   ["/admin/purchase-orders", "工厂采购订单"],
   ["/admin/purchase-orders/new", "新建采购单"],
+  ["/admin/delivery", "交期管理"],
   ["/admin/customers", "客户管理"],
   ["/admin/factories", "工厂管理"],
   ["/admin/products", "产品管理"],
@@ -516,6 +517,7 @@ async function render() {
   if (path.startsWith("/admin/orders/")) return renderSalesOrderDetail(path.split("/").pop());
   if (path === "/admin/purchase-orders/new") return renderNewPurchaseOrder();
   if (path === "/admin/purchase-orders" || path === "/factory/orders") return renderPurchaseOrders();
+  if (path === "/admin/delivery") return renderDeliveryManagement();
   if (path.startsWith("/admin/purchase-orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
   if (path.startsWith("/factory/orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
   if (path === "/admin/customers") return renderCrud("customers", "客户管理", customerFields());
@@ -692,6 +694,120 @@ async function loadPurchaseOrders() {
     else renderPurchaseOrderModal(btn.dataset.po);
   }));
   bindPurchaseOrderDeleteButtons();
+}
+
+async function renderDeliveryManagement() {
+  shell(pageTitle("交期管理", "集中查看每个采购单交期；临近交期自动颜色提醒，并可快速标记发货或调整交期。") + `
+    <section class="panel">
+      <div class="toolbar">
+        <div class="filters">
+          <input class="input" id="deliverySearch" placeholder="搜索采购单号、工厂、状态">
+          <select class="select" id="deliveryStatus">
+            <option value="">全部交期</option>
+            <option value="red">今天到期 / 已逾期</option>
+            <option value="yellow">剩余 2 天</option>
+            <option value="blue">剩余 3 天</option>
+            <option value="green">已处理</option>
+          </select>
+        </div>
+        <button class="btn" id="refreshDelivery">刷新</button>
+      </div>
+      <div id="deliveryBoard">加载中...</div>
+    </section>`);
+  $("#deliverySearch")?.addEventListener("input", debounce(loadDeliveryBoard, 250));
+  $("#deliveryStatus")?.addEventListener("change", loadDeliveryBoard);
+  $("#refreshDelivery")?.addEventListener("click", loadDeliveryBoard);
+  await loadDeliveryBoard();
+}
+
+async function loadDeliveryBoard() {
+  const data = await api("/api/purchase-orders?sort=factoryDeliveryDate&dir=asc&page=1&pageSize=50");
+  const q = String($("#deliverySearch")?.value || "").trim().toLowerCase();
+  const status = $("#deliveryStatus")?.value || "";
+  let rows = data.items || [];
+  if (q) {
+    rows = rows.filter((row) => [row.poNo, row.salesOrderNumber, row.factoryName, row.productionStatus, row.qcStatus, row.factoryDeliveryDate]
+      .some((value) => String(value || "").toLowerCase().includes(q)));
+  }
+  if (status) rows = rows.filter((row) => deliveryAlert(row).color === status);
+  $("#deliveryBoard").innerHTML = `
+    <div class="delivery-legend">
+      <span>${deliveryBadge("blue", "剩余 3 天")}</span>
+      <span>${deliveryBadge("yellow", "剩余 2 天")}</span>
+      <span>${deliveryBadge("red", "当天 / 已逾期")}</span>
+      <span>${deliveryBadge("green", "已处理")}</span>
+    </div>
+    ${simpleTable(rows, ["poNo", "factoryName", "factoryDeliveryDate", "daysLeft", "productionStatus", "qcStatus", "purchaseTotalCny", "actions"], ["采购单号", "工厂", "交期", "提醒", "生产状态", "质检", "金额（CNY）", "操作"], (row, key) => {
+      const alert = deliveryAlert(row);
+      if (key === "poNo") return `<strong>${displayValue(row.poNo)}</strong><div class="muted">${displayValue(row.salesOrderNumber)}</div>`;
+      if (key === "factoryDeliveryDate") return `<span class="delivery-date ${alert.color}">${displayValue(row.factoryDeliveryDate)}</span>`;
+      if (key === "daysLeft") return deliveryBadge(alert.color, alert.text);
+      if (["productionStatus", "qcStatus"].includes(key)) return tag(row[key], row[key]);
+      if (key === "purchaseTotalCny") return moneyCny(row[key]);
+      if (key === "actions") return `
+        <div class="delivery-actions">
+          <button class="btn small primary" data-delivery-ship="${row.id}">已按时发货</button>
+          <span class="delivery-adjust">
+            <input class="input" type="date" value="${escapeAttr(row.factoryDeliveryDate || "")}" data-delivery-date="${row.id}">
+            <button class="btn small" data-delivery-adjust="${row.id}">调整交期</button>
+          </span>
+          <button class="btn small" data-po="${row.id}">查看</button>
+        </div>`;
+      return displayValue(row[key]);
+    })}`;
+  bindDeliveryActions();
+}
+
+function bindDeliveryActions() {
+  $$("[data-delivery-ship]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (!confirm("确认该采购单已按时发货吗？系统会记录到时间线。")) return;
+    await api(`/api/purchase-orders/${btn.dataset.deliveryShip}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        productionStatus: "Production Completed",
+        factoryConfirmStatus: "Confirmed",
+        note: "已按时发货"
+      })
+    });
+    alert("已保存：该采购单已标记为按时发货");
+    await loadDeliveryBoard();
+  }));
+  $$("[data-delivery-adjust]").forEach((btn) => btn.addEventListener("click", async () => {
+    const id = btn.dataset.deliveryAdjust;
+    const date = $(`[data-delivery-date="${id}"]`)?.value;
+    if (!date) return alert("请先选择新的交期");
+    await api(`/api/purchase-orders/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ factoryDeliveryDate: date, note: "交期管理页面调整交期" })
+    });
+    alert("保存成功：交期已调整");
+    await loadDeliveryBoard();
+  }));
+  $$("[data-po]").forEach((btn) => btn.addEventListener("click", () => renderPurchaseOrderModal(btn.dataset.po)));
+}
+
+function deliveryAlert(row) {
+  if (["Production Completed", "Shipped", "Delivered", "Closed"].includes(row.productionStatus)) return { color: "green", text: "已处理" };
+  const days = daysUntilChinaDate(row.factoryDeliveryDate);
+  if (days === null) return { color: "neutral", text: "未设置交期" };
+  if (days <= 0) return { color: "red", text: days < 0 ? `已逾期 ${Math.abs(days)} 天` : "今天到期" };
+  if (days === 2) return { color: "yellow", text: "剩余 2 天" };
+  if (days === 3) return { color: "blue", text: "剩余 3 天" };
+  return { color: "neutral", text: `剩余 ${days} 天` };
+}
+
+function daysUntilChinaDate(dateValue) {
+  if (!dateValue) return null;
+  const date = String(dateValue).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const todayDate = formatChinaDate(new Date());
+  const target = new Date(`${date}T00:00:00+08:00`);
+  const todayStart = new Date(`${todayDate}T00:00:00+08:00`);
+  return Math.round((target - todayStart) / 86400000);
+}
+
+function deliveryBadge(color, text) {
+  return `<span class="delivery-badge ${color}">${displayValue(text)}</span>`;
 }
 
 function listShell(kind) {
