@@ -1395,7 +1395,10 @@ function fileCard(file) {
       <strong title="${escapeAttr(file.fileName || "")}">${displayValue(file.fileName)}</strong>
       <span>${fileTypeLabel(file.fileType)} · ${displayValue(file.createdAt)}</span>
     </div>
-    <a class="btn small" href="${downloadUrl}" download="${escapeAttr(file.fileName || "order-file")}">下载</a>
+    <div class="file-actions">
+      <a class="btn small" href="${downloadUrl}" download="${escapeAttr(file.fileName || "order-file")}">下载</a>
+      <button class="btn small danger" data-delete-qc-file="${file.id}" data-file-name="${escapeAttr(file.fileName || "质检图片")}">删除</button>
+    </div>
   </div>`;
 }
 
@@ -1432,6 +1435,21 @@ function bindQcPhotoUploads(po, factoryMode) {
   };
   uploadInput("#qcProductPhotoInput", "QC Product Image");
   uploadInput("#qcPackingPhotoInput", "QC Packing Image");
+  bindQcFileDeletes(po, factoryMode);
+}
+
+function bindQcFileDeletes(po, factoryMode) {
+  $$("[data-delete-qc-file]").forEach((btn) => btn.addEventListener("click", async () => {
+    const fileName = btn.dataset.fileName || "质检图片";
+    if (!confirm(`确认删除这张质检图片吗？\n${fileName}`)) return;
+    try {
+      await api(`/api/files/${btn.dataset.deleteQcFile}`, { method: "DELETE" });
+      alert("删除成功");
+      await renderCurrentPurchaseOrder(po, factoryMode);
+    } catch (error) {
+      alert(error.message || "删除失败");
+    }
+  }));
 }
 
 function bindPoActions(po, factoryMode) {

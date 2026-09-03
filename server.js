@@ -569,6 +569,19 @@ function notifyOrderOperation(db, user, type, payload = {}) {
       factoryId: po?.factoryId || ""
     });
   }
+  if (type === "file_deleted") {
+    return notify(db, {
+      ...shared,
+      title: "质检图片已删除",
+      message: `${user?.name || "用户"} 删除了 ${payload.fileType || "质检图片"}，关联订单 ${orderNo || "未指定"}。`,
+      entityType: payload.entityType || "order_file",
+      entityId: payload.entityId || "",
+      roles: [ROLE.ADMIN, ROLE.MERCH],
+      userIds: salesOwnerId ? [salesOwnerId] : [],
+      factoryId: po?.factoryId || "",
+      severity: "warning"
+    });
+  }
   if (type === "order_archived") {
     return notify(db, {
       ...shared,
@@ -644,7 +657,7 @@ function visibleSalesOrder(db, order, user) {
     items: salesItems(db, order.id),
     purchaseOrders: db.purchase_orders.filter((po) => po.salesOrderId === order.id).map((po) => visiblePurchaseOrder(db, po, user)),
     timeline: db.order_timeline.filter((tl) => tl.orderId === order.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    files: db.order_files.filter((file) => file.salesOrderId === order.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile)
+    files: db.order_files.filter((file) => !isDeleted(file) && file.salesOrderId === order.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile)
   };
   if (canViewFinance(user)) base.profit = profitForSalesOrder(db, order);
   if (user?.role === ROLE.SALES && order.salesId !== user.id) base.restricted = true;
@@ -664,7 +677,7 @@ function visiblePurchaseOrder(db, po, user) {
     purchaseTotalCny: sum(poItems(db, po.id), "purchaseTotal"),
     pendingDeliveryChange: pendingDeliveryChange ? publicDeliveryChangeRequest(db, pendingDeliveryChange) : null,
     qcReports: db.qc_reports.filter((qc) => qc.purchaseOrderId === po.id),
-    files: db.order_files.filter((file) => file.purchaseOrderId === po.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile),
+    files: db.order_files.filter((file) => !isDeleted(file) && file.purchaseOrderId === po.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile),
     timeline: db.order_timeline.filter((tl) => tl.orderId === po.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   };
   if (isFactory(user)) {
@@ -2674,6 +2687,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
   if (resource === "files" && method === "GET" && resourceId && action === "download") {
     const file = db.order_files.find((item) => item.id === resourceId);
     if (!file) return json(res, 404, { error: "Not found" });
+    if (isDeleted(file)) return json(res, 404, { error: "文件已删除" });
     if (!fileBelongsToAccessibleOrder(db, file, user)) return json(res, 403, { error: "Forbidden" });
     let buffer = null;
     if (file.contentBase64) {
@@ -2688,6 +2702,29 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       "content-disposition": `${disposition}; filename="${downloadFileName(file.fileName || "order-file")}"`
     });
     return res.end(buffer);
+  }
+
+  if (resource === "files" && method === "DELETE" && resourceId) {
+    const file = db.order_files.find((item) => item.id === resourceId);
+    if (!file) return json(res, 404, { error: "Not found" });
+    if (isDeleted(file)) return json(res, 200, { ok: true, deleted: true });
+    if (!fileBelongsToAccessibleOrder(db, file, user)) return json(res, 403, { error: "Forbidden" });
+    if (!["QC Product Image", "QC Packing Image"].includes(file.fileType)) return json(res, 403, { error: "只能删除质检报告里的产品照片或包装照片" });
+    const before = { ...file };
+    file.deletedAt = now();
+    file.deletedBy = user.id;
+    file.deletedByName = user.name;
+    audit(db, user, "order_file", file.id, "soft_delete", before, { ...file, contentBase64: "" });
+    const relatedPo = file.purchaseOrderId ? db.purchase_orders.find((item) => item.id === file.purchaseOrderId) : null;
+    addTimeline(db, file.purchaseOrderId || file.salesOrderId || file.id, file.purchaseOrderId ? "purchase_order" : "sales_order", user, "", "", `删除质检图片：${file.fileName || file.fileType}`);
+    notifyOrderOperation(db, user, "file_deleted", {
+      purchaseOrder: relatedPo,
+      salesOrder: relatedPo ? db.sales_orders.find((item) => item.id === relatedPo.salesOrderId) : null,
+      fileType: statusText(file.fileType) || file.fileType,
+      entityId: file.id
+    });
+    await writeDb(db);
+    return json(res, 200, { ok: true, deleted: true });
   }
 
   if (resource === "reminders" && method === "GET") return json(res, 200, { items: createReminderRecords(db) });

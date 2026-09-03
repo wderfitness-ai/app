@@ -765,6 +765,16 @@ tr:hover td { background: var(--hover); }
   font-size: 12px;
 }
 
+.file-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.file-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
 .tag {
   display: inline-flex;
   align-items: center;
