@@ -2890,7 +2890,7 @@ async function appHandler(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (!url.pathname.startsWith("/api/")) return serveStatic(req, res, url);
     if (url.pathname === "/api/health" && req.method === "GET") {
-      return json(res, 200, { ok: true, time: now() });
+      return json(res, 200, { ok: true, time: now(), bootstrapAdminConfigured: Boolean(BOOTSTRAP_ADMIN.password) });
     }
     if (url.pathname === "/api/login" && req.method === "POST") {
       const body = await bodyJson(req);
