@@ -151,15 +151,13 @@ async function readDb() {
   if (USE_BLOB_DB) {
     const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false });
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
-    let changed = ensureDbShape(db);
-    changed = ensureBootstrapAdmin(db) || changed;
+    const changed = ensureDbShape(db);
     if (!stored || changed) await writeDb(db);
     return db;
   }
   await ensureDataFile();
   const db = JSON.parse(await readFile(DATA_FILE, "utf8"));
-  let changed = ensureDbShape(db);
-  changed = ensureBootstrapAdmin(db) || changed;
+  const changed = ensureDbShape(db);
   if (changed) await writeDb(db);
   return db;
 }
@@ -257,7 +255,20 @@ function verifySessionToken(token) {
 
 async function getUser(req, db) {
   const userId = verifySessionToken(parseCookies(req).session);
-  return userId ? db.users.find((user) => user.id === userId) || null : null;
+  if (!userId) return null;
+  if (userId === BOOTSTRAP_ADMIN.id && BOOTSTRAP_ADMIN.password) return virtualBootstrapAdmin();
+  return db.users.find((user) => user.id === userId) || null;
+}
+
+function virtualBootstrapAdmin() {
+  return {
+    ...BOOTSTRAP_ADMIN,
+    factoryId: "",
+    approvedBy: "system",
+    approvedAt: now(),
+    createdAt: now(),
+    updatedAt: now()
+  };
 }
 
 function canViewFinance(user) {
@@ -1851,14 +1862,11 @@ async function handleApi(req, res, db, user, url) {
     const body = await bodyJson(req);
     const identity = String(body.email || "").trim();
     const password = String(body.password || "");
-    let found = findLoginUser(db.users, identity);
     const normalizedIdentity = identity.toLowerCase();
     const bootstrapEmail = String(BOOTSTRAP_ADMIN.email || "").toLowerCase();
     const bootstrapName = String(BOOTSTRAP_ADMIN.name || "").toLowerCase();
-    if (!found && BOOTSTRAP_ADMIN.password && (normalizedIdentity === bootstrapEmail || normalizedIdentity === bootstrapName)) {
-      if (ensureBootstrapAdmin(db)) await writeDb(db);
-      found = findLoginUser(db.users, identity);
-    }
+    const isBootstrapLogin = BOOTSTRAP_ADMIN.password && (normalizedIdentity === bootstrapEmail || normalizedIdentity === bootstrapName);
+    const found = isBootstrapLogin ? virtualBootstrapAdmin() : findLoginUser(db.users, identity);
     if (!found) return json(res, 401, { error: "账号不存在；如果刚注册，请确认注册已提交成功。" });
     if (!matchesLoginPassword(found, password)) return json(res, 401, { error: "密码错误，请检查输入的密码。" });
     if (!isApprovedUser(found)) return json(res, 403, { error: found.approvalStatus === "rejected" ? "账号审核未通过，请联系管理员" : "账号正在等待管理员审核" });
