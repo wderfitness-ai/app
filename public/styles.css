@@ -509,6 +509,14 @@ a {
   margin-bottom: 12px;
 }
 
+.delivery-request-panel {
+  margin: 0 0 14px;
+}
+
+.delivery-request-panel h2 {
+  margin: 0 0 10px;
+}
+
 .delivery-badge {
   display: inline-flex;
   align-items: center;
@@ -554,6 +562,13 @@ a {
   font-weight: 800;
   background: var(--tag-bg);
   color: var(--tag-text);
+}
+
+.delivery-pending {
+  margin-top: 6px;
+  color: var(--yellow);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .delivery-actions {

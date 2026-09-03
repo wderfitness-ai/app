@@ -141,6 +141,7 @@ function emptyDb() {
     qc_report_items: [],
     payments: [],
     reminders: [],
+    delivery_change_requests: [],
     notifications: [],
     audit_logs: []
   };
@@ -641,6 +642,7 @@ function visibleSalesOrder(db, order, user) {
 function visiblePurchaseOrder(db, po, user) {
   const factory = db.factories.find((f) => f.id === po.factoryId);
   const salesOrder = db.sales_orders.find((so) => so.id === po.salesOrderId);
+  const pendingDeliveryChange = pendingDeliveryChangeForPo(db, po.id);
   const base = {
     ...po,
     factoryName: factory?.name || "",
@@ -648,6 +650,7 @@ function visiblePurchaseOrder(db, po, user) {
     statusZh: STATUS_ZH[po.productionStatus] || po.productionStatus,
     items: poItems(db, po.id),
     purchaseTotalCny: sum(poItems(db, po.id), "purchaseTotal"),
+    pendingDeliveryChange: pendingDeliveryChange ? publicDeliveryChangeRequest(db, pendingDeliveryChange) : null,
     qcReports: db.qc_reports.filter((qc) => qc.purchaseOrderId === po.id),
     files: db.order_files.filter((file) => file.purchaseOrderId === po.id && fileBelongsToAccessibleOrder(db, file, user)).map(enrichOrderFile),
     timeline: db.order_timeline.filter((tl) => tl.orderId === po.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -660,6 +663,36 @@ function visiblePurchaseOrder(db, po, user) {
     base.items = base.items.map(({ purchaseUnitPrice, purchaseTotal, ...item }) => item);
   }
   return base;
+}
+
+function pendingDeliveryChangeForPo(db, purchaseOrderId) {
+  return (db.delivery_change_requests || [])
+    .filter((request) => request.purchaseOrderId === purchaseOrderId && request.status === "Pending")
+    .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))[0] || null;
+}
+
+function publicDeliveryChangeRequest(db, request) {
+  const po = db.purchase_orders.find((item) => item.id === request.purchaseOrderId);
+  const factory = db.factories.find((item) => item.id === (request.factoryId || po?.factoryId));
+  return {
+    id: request.id,
+    purchaseOrderId: request.purchaseOrderId,
+    poNo: request.poNo || po?.poNo || "",
+    factoryId: request.factoryId || po?.factoryId || "",
+    factoryName: factory?.name || "",
+    currentDeliveryDate: po?.factoryDeliveryDate || "",
+    oldDate: request.oldDate || "",
+    requestedDate: request.requestedDate || "",
+    status: request.status || "Pending",
+    requestedById: request.requestedById || "",
+    requestedByName: request.requestedByName || "",
+    reviewedByName: request.reviewedByName || "",
+    reviewedAt: request.reviewedAt || "",
+    note: request.note || "",
+    rejectedReason: request.rejectedReason || "",
+    createdAt: request.createdAt || "",
+    updatedAt: request.updatedAt || request.createdAt || ""
+  };
 }
 
 function fileBelongsToAccessibleOrder(db, file, user) {
@@ -1930,6 +1963,81 @@ async function handleApi(req, res, db, user, url) {
     }
   }
 
+  if (resource === "delivery-change-requests") {
+    db.delivery_change_requests ||= [];
+    if (method === "GET") {
+      let requests = db.delivery_change_requests;
+      const status = url.searchParams.get("status");
+      if (status) requests = requests.filter((request) => request.status === status);
+      if (isFactory(user)) {
+        requests = requests.filter((request) => request.factoryId === user.factoryId || request.requestedById === user.id);
+      } else if (![ROLE.ADMIN, ROLE.MERCH].includes(user.role)) {
+        return json(res, 403, { error: "Forbidden" });
+      }
+      requests = requests
+        .map((request) => publicDeliveryChangeRequest(db, request))
+        .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+      return json(res, 200, { items: requests, total: requests.length });
+    }
+    if (method === "PATCH" && resourceId) {
+      if (!requireRole(user, res, [ROLE.ADMIN])) return;
+      const requestRecord = db.delivery_change_requests.find((request) => request.id === resourceId);
+      if (!requestRecord) return json(res, 404, { error: "Not found" });
+      if (requestRecord.status !== "Pending") return json(res, 400, { error: "该交期申请已处理" });
+      const body = await bodyJson(req);
+      const nextStatus = body.status || body.action;
+      const po = db.purchase_orders.find((item) => item.id === requestRecord.purchaseOrderId);
+      if (!po) return json(res, 404, { error: "Purchase order not found" });
+      const beforeRequest = { ...requestRecord };
+      const beforePo = { ...po };
+      requestRecord.reviewedById = user.id;
+      requestRecord.reviewedByName = user.name;
+      requestRecord.reviewedAt = now();
+      requestRecord.updatedAt = now();
+      if (nextStatus === "Approved" || nextStatus === "approve") {
+        const oldDate = po.factoryDeliveryDate || "";
+        po.factoryDeliveryDate = requestRecord.requestedDate;
+        po.updatedAt = now();
+        requestRecord.status = "Approved";
+        addTimeline(db, po.id, "purchase_order", user, oldDate, po.factoryDeliveryDate, `管理员审核通过交期调整申请（申请人：${requestRecord.requestedByName || "-"}）`);
+        audit(db, user, "purchase_order", po.id, "approve_delivery_change", beforePo, po);
+        notify(db, {
+          actor: user,
+          title: "交期调整已通过",
+          message: `采购单 ${po.poNo} 的新交期已审核通过，正式交期调整为 ${po.factoryDeliveryDate}。`,
+          entityType: "purchase_order",
+          entityId: po.id,
+          orderNo: po.poNo,
+          roles: [ROLE.FACTORY],
+          factoryId: po.factoryId,
+          userIds: requestRecord.requestedById ? [requestRecord.requestedById] : [],
+          severity: "success"
+        });
+      } else if (nextStatus === "Rejected" || nextStatus === "reject") {
+        requestRecord.status = "Rejected";
+        requestRecord.rejectedReason = body.note || body.rejectedReason || "";
+        addTimeline(db, po.id, "purchase_order", user, po.factoryDeliveryDate || "", po.factoryDeliveryDate || "", `管理员拒绝交期调整申请：${requestRecord.rejectedReason || "未填写原因"}`);
+        notify(db, {
+          actor: user,
+          title: "交期调整未通过",
+          message: `采购单 ${po.poNo} 的交期调整申请未通过，正式交期保持为 ${po.factoryDeliveryDate || "-"}。`,
+          entityType: "purchase_order",
+          entityId: po.id,
+          orderNo: po.poNo,
+          roles: [ROLE.FACTORY],
+          factoryId: po.factoryId,
+          userIds: requestRecord.requestedById ? [requestRecord.requestedById] : [],
+          severity: "warning"
+        });
+      } else {
+        return json(res, 400, { error: "status must be Approved or Rejected" });
+      }
+      audit(db, user, "delivery_change_request", requestRecord.id, requestRecord.status === "Approved" ? "approve" : "reject", beforeRequest, requestRecord);
+      await writeDb(db);
+      return json(res, 200, publicDeliveryChangeRequest(db, requestRecord));
+    }
+  }
+
   if (resource === "blob-upload-url" && method === "POST") {
     const body = await bodyJson(req);
     if (!USE_BLOB_DB) return json(res, 501, { error: "当前环境未配置文件直传存储，请使用较小文件或联系管理员配置 Blob。"});
@@ -2326,8 +2434,10 @@ async function handleApi(req, res, db, user, url) {
       if ("productionStatus" in body && !PURCHASE_PRODUCTION_STATUS.includes(body.productionStatus)) return json(res, 400, { error: "采购单生产状态只能选择：已安排工厂、生产中、生产完成" });
       const oldStatus = po.productionStatus;
       const oldFactoryDeliveryDate = po.factoryDeliveryDate;
+      const requestedFactoryDeliveryDate = String(body.factoryDeliveryDate || "").slice(0, 10);
+      const factoryRequestedDeliveryChange = isFactory(user) && requestedFactoryDeliveryDate && requestedFactoryDeliveryDate !== oldFactoryDeliveryDate;
       const allowedKeys = isFactory(user)
-        ? ["factoryConfirmStatus", "productionStatus", "qcStatus", "remark", "factoryDeliveryDate"]
+        ? ["factoryConfirmStatus", "productionStatus", "qcStatus", "remark"]
         : user.role === ROLE.ADMIN
           ? Object.keys(body)
           : user.role === ROLE.SALES
@@ -2372,7 +2482,39 @@ async function handleApi(req, res, db, user, url) {
       }
       po.updatedAt = now();
       if (body.productionStatus && body.productionStatus !== oldStatus) addTimeline(db, po.id, "purchase_order", user, oldStatus, body.productionStatus, body.note || "生产状态更新");
-      if (body.factoryDeliveryDate && body.factoryDeliveryDate !== oldFactoryDeliveryDate) addTimeline(db, po.id, "purchase_order", user, oldFactoryDeliveryDate, body.factoryDeliveryDate, "工厂提交/更新交期");
+      if (factoryRequestedDeliveryChange) {
+        db.delivery_change_requests ||= [];
+        const existingPending = pendingDeliveryChangeForPo(db, po.id);
+        const requestBefore = existingPending ? { ...existingPending } : null;
+        const requestRecord = existingPending || {
+          id: id("dcr"),
+          purchaseOrderId: po.id,
+          poNo: po.poNo,
+          factoryId: po.factoryId,
+          oldDate: oldFactoryDeliveryDate || "",
+          requestedById: user.id,
+          requestedByName: user.name,
+          status: "Pending",
+          createdAt: now()
+        };
+        requestRecord.requestedDate = requestedFactoryDeliveryDate;
+        requestRecord.note = body.note || "工厂提交交期调整申请";
+        requestRecord.updatedAt = now();
+        if (!existingPending) db.delivery_change_requests.push(requestRecord);
+        addTimeline(db, po.id, "purchase_order", user, oldFactoryDeliveryDate || "", requestedFactoryDeliveryDate, "工厂提交交期调整申请，等待管理员审核");
+        audit(db, user, "delivery_change_request", requestRecord.id, existingPending ? "update_request" : "create_request", requestBefore, requestRecord);
+        notify(db, {
+          actor: user,
+          title: "工厂提交交期调整申请",
+          message: `采购单 ${po.poNo} 申请将交期从 ${oldFactoryDeliveryDate || "-"} 调整为 ${requestedFactoryDeliveryDate}，请管理员审核。`,
+          entityType: "purchase_order",
+          entityId: po.id,
+          orderNo: po.poNo,
+          roles: [ROLE.ADMIN],
+          severity: "high"
+        });
+      }
+      if (!isFactory(user) && body.factoryDeliveryDate && body.factoryDeliveryDate !== oldFactoryDeliveryDate) addTimeline(db, po.id, "purchase_order", user, oldFactoryDeliveryDate, body.factoryDeliveryDate, "管理员/跟单调整交期");
       audit(db, user, "purchase_order", po.id, "update", before, po);
       notifyOrderOperation(db, user, isFactory(user) ? "purchase_updated_by_factory" : "purchase_updated", {
         salesOrder: db.sales_orders.find((item) => item.id === po.salesOrderId),

@@ -110,6 +110,8 @@ const db = {
   qc_report_items,
   payments,
   reminders: [],
+  delivery_change_requests: [],
+  notifications: [],
   audit_logs: []
 };
 

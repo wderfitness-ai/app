@@ -33,6 +33,7 @@ const navAdmin = [
 const navFactory = [
   ["/factory/dashboard", "工厂看板"],
   ["/factory/notifications", "通知中心"],
+  ["/factory/delivery", "交期管理"],
   ["/factory/orders", "我的采购订单"]
 ];
 
@@ -74,7 +75,9 @@ const STATUS_LABELS = {
   "Not Started": "未开始",
   Passed: "通过",
   Failed: "不通过",
-  "Need Rework": "需要返工"
+  "Need Rework": "需要返工",
+  Approved: "已通过",
+  Rejected: "已拒绝"
 };
 
 const PAYMENT_TYPE_LABELS = {
@@ -512,12 +515,12 @@ async function render() {
   if (state.user.role === "Factory" && !path.startsWith("/factory")) return go("/factory/dashboard");
   if (path === "/admin/dashboard" || path === "/factory/dashboard") return renderDashboard();
   if (path === "/admin/notifications" || path === "/factory/notifications") return renderNotificationsPage();
+  if (path === "/admin/delivery" || path === "/factory/delivery") return renderDeliveryManagement();
   if (path === "/admin/orders" || path === "/admin/sales-orders") return renderSalesOrders();
   if (path === "/admin/orders/new") return renderNewSalesOrder();
   if (path.startsWith("/admin/orders/")) return renderSalesOrderDetail(path.split("/").pop());
   if (path === "/admin/purchase-orders/new") return renderNewPurchaseOrder();
   if (path === "/admin/purchase-orders" || path === "/factory/orders") return renderPurchaseOrders();
-  if (path === "/admin/delivery") return renderDeliveryManagement();
   if (path.startsWith("/admin/purchase-orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
   if (path.startsWith("/factory/orders/")) return renderPurchaseOrderDetail(path.split("/").pop());
   if (path === "/admin/customers") return renderCrud("customers", "客户管理", customerFields());
@@ -531,7 +534,7 @@ async function render() {
 }
 
 async function renderDashboard() {
-  const dashboardAction = state.user.role === "Factory" ? "" : `<button class="btn primary" data-go="/admin/delivery">进入交期管理</button>`;
+  const dashboardAction = state.user.role === "Factory" ? `<button class="btn primary" data-go="/factory/delivery">进入交期管理</button>` : `<button class="btn primary" data-go="/admin/delivery">进入交期管理</button>`;
   shell(pageTitle("首页看板", "订单进度、付款、质检、延期与工厂更新集中查看。", dashboardAction) + `<div id="dashboard">加载中...</div>`);
   bindGoButtons();
   const data = await api("/api/dashboard");
@@ -699,7 +702,8 @@ async function loadPurchaseOrders() {
 }
 
 async function renderDeliveryManagement() {
-  shell(pageTitle("交期管理", "集中查看每个采购单交期；临近交期自动颜色提醒，并可快速标记发货或调整交期。") + `
+  const factoryMode = state.user.role === "Factory";
+  shell(pageTitle("交期管理", factoryMode ? "查看本厂采购单交期；如需调整交期，请提交申请，管理员审核通过后正式生效。" : "集中查看每个采购单交期；临近交期自动颜色提醒，并可快速标记发货或调整交期。") + `
     <section class="panel">
       <div class="toolbar">
         <div class="filters">
@@ -714,6 +718,7 @@ async function renderDeliveryManagement() {
         </div>
         <button class="btn" id="refreshDelivery">刷新</button>
       </div>
+      <div id="deliveryRequests"></div>
       <div id="deliveryBoard">加载中...</div>
     </section>`);
   $("#deliverySearch")?.addEventListener("input", debounce(loadDeliveryBoard, 250));
@@ -723,7 +728,11 @@ async function renderDeliveryManagement() {
 }
 
 async function loadDeliveryBoard() {
-  const data = await api("/api/purchase-orders?sort=factoryDeliveryDate&dir=asc&page=1&pageSize=50");
+  const factoryMode = state.user.role === "Factory";
+  const [data, requestsData] = await Promise.all([
+    api("/api/purchase-orders?sort=factoryDeliveryDate&dir=asc&page=1&pageSize=50"),
+    api("/api/delivery-change-requests?status=Pending")
+  ]);
   const q = String($("#deliverySearch")?.value || "").trim().toLowerCase();
   const status = $("#deliveryStatus")?.value || "";
   let rows = data.items || [];
@@ -732,6 +741,7 @@ async function loadDeliveryBoard() {
       .some((value) => String(value || "").toLowerCase().includes(q)));
   }
   if (status) rows = rows.filter((row) => deliveryAlert(row).color === status);
+  $("#deliveryRequests").innerHTML = renderDeliveryRequests(requestsData.items || [], factoryMode);
   $("#deliveryBoard").innerHTML = `
     <div class="delivery-legend">
       <span>${deliveryBadge("blue", "剩余 3 天")}</span>
@@ -742,7 +752,7 @@ async function loadDeliveryBoard() {
     ${simpleTable(rows, ["poNo", "factoryName", "factoryDeliveryDate", "daysLeft", "productionStatus", "qcStatus", "purchaseTotalCny", "actions"], ["采购单号", "工厂", "交期", "提醒", "生产状态", "质检", "金额（CNY）", "操作"], (row, key) => {
       const alert = deliveryAlert(row);
       if (key === "poNo") return `<strong>${displayValue(row.poNo)}</strong><div class="muted">${displayValue(row.salesOrderNumber)}</div>`;
-      if (key === "factoryDeliveryDate") return `<span class="delivery-date ${alert.color}">${displayValue(row.factoryDeliveryDate)}</span>`;
+      if (key === "factoryDeliveryDate") return `<span class="delivery-date ${alert.color}">${displayValue(row.factoryDeliveryDate)}</span>${row.pendingDeliveryChange ? `<div class="delivery-pending">待审核：${displayValue(row.pendingDeliveryChange.requestedDate)}</div>` : ""}`;
       if (key === "daysLeft") return deliveryBadge(alert.color, alert.text);
       if (["productionStatus", "qcStatus"].includes(key)) return tag(row[key], row[key]);
       if (key === "purchaseTotalCny") return moneyCny(row[key]);
@@ -751,13 +761,31 @@ async function loadDeliveryBoard() {
           <button class="btn small primary" data-delivery-ship="${row.id}">已按时发货</button>
           <span class="delivery-adjust">
             <input class="input" type="date" value="${escapeAttr(row.factoryDeliveryDate || "")}" data-delivery-date="${row.id}">
-            <button class="btn small" data-delivery-adjust="${row.id}">调整交期</button>
+            <button class="btn small" data-delivery-adjust="${row.id}">${factoryMode ? "提交交期申请" : "调整交期"}</button>
           </span>
           <button class="btn small" data-po="${row.id}">查看</button>
         </div>`;
       return displayValue(row[key]);
     })}`;
   bindDeliveryActions();
+}
+
+function renderDeliveryRequests(requests = [], factoryMode = false) {
+  if (!requests.length) return `<div class="delivery-request-panel"><p class="muted">${factoryMode ? "暂无待审核交期申请" : "暂无需要审核的交期申请"}</p></div>`;
+  const keys = factoryMode
+    ? ["poNo", "currentDeliveryDate", "requestedDate", "status", "createdAt", "note"]
+    : ["poNo", "factoryName", "currentDeliveryDate", "requestedDate", "requestedByName", "createdAt", "actions"];
+  const labels = factoryMode
+    ? ["采购单号", "当前正式交期", "申请交期", "审核状态", "提交时间", "备注"]
+    : ["采购单号", "工厂", "当前正式交期", "申请交期", "申请人", "提交时间", "审核"];
+  return `<div class="delivery-request-panel">
+    <h2>${factoryMode ? "我的待审核交期申请" : "待审核交期申请"}</h2>
+    ${simpleTable(requests, keys, labels, (row, key) => {
+      if (key === "status") return tag(statusLabel(row.status), row.status);
+      if (key === "actions") return `<button class="btn small primary" data-delivery-approve="${row.id}">通过</button> <button class="btn small danger" data-delivery-reject="${row.id}">拒绝</button>`;
+      return displayValue(row[key]);
+    })}
+  </div>`;
 }
 
 function bindDeliveryActions() {
@@ -782,10 +810,31 @@ function bindDeliveryActions() {
       method: "PATCH",
       body: JSON.stringify({ factoryDeliveryDate: date, note: "交期管理页面调整交期" })
     });
-    alert("保存成功：交期已调整");
+    alert(state.user.role === "Factory" ? "已提交交期调整申请，等待管理员审核通过后生效" : "保存成功：交期已调整");
     await loadDeliveryBoard();
   }));
-  $$("[data-po]").forEach((btn) => btn.addEventListener("click", () => renderPurchaseOrderModal(btn.dataset.po)));
+  $$("[data-delivery-approve]").forEach((btn) => btn.addEventListener("click", async () => {
+    await api(`/api/delivery-change-requests/${btn.dataset.deliveryApprove}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Approved" })
+    });
+    alert("审核通过：交期已正式生效");
+    await loadDeliveryBoard();
+  }));
+  $$("[data-delivery-reject]").forEach((btn) => btn.addEventListener("click", async () => {
+    const note = prompt("请输入拒绝原因（可选）", "");
+    if (note === null) return;
+    await api(`/api/delivery-change-requests/${btn.dataset.deliveryReject}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Rejected", note })
+    });
+    alert("已拒绝该交期调整申请");
+    await loadDeliveryBoard();
+  }));
+  $$("[data-po]").forEach((btn) => btn.addEventListener("click", () => {
+    if (state.user.role === "Factory") return go(`/factory/orders/${btn.dataset.po}`);
+    return renderPurchaseOrderModal(btn.dataset.po);
+  }));
 }
 
 function deliveryAlert(row) {
@@ -1197,7 +1246,7 @@ function purchaseOrderView(po, factoryMode) {
         <div>${tag(po.productionStatus, po.productionStatus)} ${tag(po.qcStatus, po.qcStatus)}</div>
         <div class="filters">
           <select class="select" id="poStatus">${statusOptions.map((s) => `<option value="${s}" ${s === po.productionStatus ? "selected" : ""}>${statusLabel(s)}</option>`).join("")}</select>
-          <button class="btn primary" id="savePoStatus">保存交期/状态/单价</button>
+          <button class="btn primary" id="savePoStatus">${factoryMode ? "保存并提交交期申请" : "保存交期/状态/单价"}</button>
           ${state.user.role === "Admin" && !factoryMode ? `<button class="btn danger" id="deletePurchaseOrder">归档采购单</button>` : ""}
         </div>
       </div>
@@ -1209,6 +1258,7 @@ function purchaseOrderView(po, factoryMode) {
         ${field("生产状态", statusLabel(po.productionStatus))}
         ${field("质检状态", statusLabel(po.qcStatus))}
       </div>
+      ${po.pendingDeliveryChange ? `<div class="notice">交期调整待审核：当前正式交期 ${displayValue(po.factoryDeliveryDate)}，申请交期 ${displayValue(po.pendingDeliveryChange.requestedDate)}。管理员审核通过后才会生效。</div>` : ""}
       <h2>产品明细</h2>
       ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
       ${purchaseFinanceSummary(po.items)}
@@ -1486,7 +1536,8 @@ function bindPoActions(po, factoryMode) {
         method: "PATCH",
         body: JSON.stringify(payload)
       });
-      alert("保存成功");
+      const deliveryChanged = factoryMode && payload.factoryDeliveryDate && payload.factoryDeliveryDate !== po.factoryDeliveryDate;
+      alert(deliveryChanged ? "保存成功：交期调整申请已提交，等待管理员审核通过后生效" : "保存成功");
       factoryMode ? renderPurchaseOrderDetail(po.id) : renderPurchaseOrderModal(po.id);
     } catch (error) {
       alert(error.message || "保存失败");
