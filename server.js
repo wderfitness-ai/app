@@ -2889,6 +2889,9 @@ async function appHandler(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (!url.pathname.startsWith("/api/")) return serveStatic(req, res, url);
+    if (url.pathname === "/api/health" && req.method === "GET") {
+      return json(res, 200, { ok: true, time: now() });
+    }
     if (url.pathname === "/api/login" && req.method === "POST") {
       const body = await bodyJson(req);
       const identity = String(body.email || "").trim().toLowerCase();
