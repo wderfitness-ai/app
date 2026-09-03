@@ -7,6 +7,25 @@
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="preload" as="image" href="/assets/wder-logo.jpg" />
+    <script>
+      (() => {
+        try {
+          const mode = localStorage.getItem("wder-theme-mode") || "auto";
+          const hourText = new Intl.DateTimeFormat("en-US", {
+            timeZone: "Asia/Shanghai",
+            hour: "2-digit",
+            hour12: false
+          }).format(new Date());
+          const hour = Number(hourText) === 24 ? 0 : Number(hourText);
+          const resolved = mode === "auto" ? (hour >= 7 && hour < 19 ? "light" : "dark") : mode;
+          document.documentElement.dataset.themeMode = mode;
+          document.documentElement.dataset.theme = resolved;
+        } catch {
+          document.documentElement.dataset.themeMode = "auto";
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>

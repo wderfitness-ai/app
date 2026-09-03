@@ -129,6 +129,77 @@ const UNIT_LABELS = {
 };
 
 const CHINA_TIMEZONE = "Asia/Shanghai";
+const THEME_STORAGE_KEY = "wder-theme-mode";
+
+function chinaHour(date = new Date()) {
+  const hourText = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHINA_TIMEZONE,
+    hour: "2-digit",
+    hour12: false
+  }).format(date);
+  const hour = Number(hourText);
+  return hour === 24 ? 0 : hour;
+}
+
+function getThemeMode() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    return ["auto", "light", "dark"].includes(saved) ? saved : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function resolveThemeMode(mode = getThemeMode()) {
+  if (mode === "light" || mode === "dark") return mode;
+  const hour = chinaHour();
+  return hour >= 7 && hour < 19 ? "light" : "dark";
+}
+
+function applyTheme(mode = getThemeMode()) {
+  const nextMode = ["auto", "light", "dark"].includes(mode) ? mode : "auto";
+  const resolved = resolveThemeMode(nextMode);
+  document.documentElement.dataset.themeMode = nextMode;
+  document.documentElement.dataset.theme = resolved;
+  updateThemeControls(nextMode, resolved);
+}
+
+function setThemeMode(mode) {
+  const nextMode = ["auto", "light", "dark"].includes(mode) ? mode : "auto";
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, nextMode);
+  } catch {
+    // Theme preference is non-critical; continue with the selected runtime value.
+  }
+  applyTheme(nextMode);
+}
+
+function themeControlHtml(extraClass = "") {
+  return `
+    <label class="theme-control ${extraClass}">
+      <span data-theme-current>自动</span>
+      <select class="select theme-select" data-theme-select aria-label="主题模式">
+        <option value="auto">自动</option>
+        <option value="light">白天</option>
+        <option value="dark">夜间</option>
+      </select>
+    </label>`;
+}
+
+function updateThemeControls(mode = getThemeMode(), resolved = resolveThemeMode(mode)) {
+  const resolvedLabel = resolved === "dark" ? "夜间" : "白天";
+  const label = mode === "auto" ? `自动：${resolvedLabel}` : resolvedLabel;
+  $$("[data-theme-current]").forEach((node) => { node.textContent = label; });
+  $$("[data-theme-select]").forEach((select) => { select.value = mode; });
+}
+
+function bindThemeControls() {
+  $$("[data-theme-select]").forEach((select) => {
+    select.value = getThemeMode();
+    select.addEventListener("change", () => setThemeMode(select.value));
+  });
+  applyTheme();
+}
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -179,6 +250,7 @@ function renderLogin() {
         <div class="toolbar" style="justify-content:flex-start;margin-bottom:14px">
           <button class="btn small primary" type="button" id="showLogin">登录</button>
           <button class="btn small" type="button" id="showRegister">注册</button>
+          ${themeControlHtml("login-theme-control")}
         </div>
         <div id="loginFields">
         <label>邮箱 / 用户名<input class="input" name="email" value="wderfitness@gmail.com" autocomplete="username"></label>
@@ -227,6 +299,7 @@ function renderLogin() {
         <button class="btn primary" style="width:100%" id="authSubmit">登录</button>
       </form>
     </main>`;
+  bindThemeControls();
   let mode = "login";
   const setMode = (next) => {
     mode = next;
@@ -305,6 +378,7 @@ function shell(content) {
         <header class="topbar">
           <div><strong>${state.user.name}</strong><span class="tag blue" style="margin-left:8px">${roleLabel(state.user.role)}</span></div>
           <div class="topbar-actions">
+            ${themeControlHtml()}
             <div class="notification-wrap">
               <button class="btn small notification-btn" id="notificationBtn" type="button">通知 <span id="notificationBadge" class="badge hidden">0</span></button>
               <div class="notification-menu hidden" id="notificationMenu">
@@ -333,6 +407,7 @@ function shell(content) {
     renderLogin();
   });
   bindNotificationMenu();
+  bindThemeControls();
   refreshNotifications();
 }
 
@@ -1852,5 +1927,10 @@ function productFields() {
     { name: "remark", label: "备注", type: "textarea" }
   ];
 }
+
+applyTheme();
+setInterval(() => {
+  if (getThemeMode() === "auto") applyTheme("auto");
+}, 60_000);
 
 boot();
