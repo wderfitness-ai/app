@@ -208,7 +208,8 @@ function now() {
 
 function ensureBootstrapAdmin(db) {
   if (!BOOTSTRAP_ADMIN.password) return false;
-  const existing = db.users.find((user) => String(user.email || "").toLowerCase() === BOOTSTRAP_ADMIN.email);
+  const bootstrapEmail = String(BOOTSTRAP_ADMIN.email || "").toLowerCase();
+  const existing = db.users.find((user) => String(user.email || "").toLowerCase() === bootstrapEmail);
   if (existing) {
     let changed = false;
     for (const [key, value] of Object.entries(BOOTSTRAP_ADMIN)) {
@@ -298,8 +299,9 @@ function matchesLoginIdentity(user, identity) {
 
 function findLoginUser(users, identity) {
   const normalized = String(identity || "").trim().toLowerCase();
+  const bootstrapEmail = String(BOOTSTRAP_ADMIN.email || "").toLowerCase();
   return users.find((user) => String(user.email || "").toLowerCase() === normalized)
-    || users.find((user) => String(user.email || "").toLowerCase() === BOOTSTRAP_ADMIN.email && String(user.name || "").toLowerCase() === normalized)
+    || users.find((user) => String(user.email || "").toLowerCase() === bootstrapEmail && String(user.name || "").toLowerCase() === normalized)
     || users.find((user) => String(user.name || "").toLowerCase() === normalized)
     || null;
 }
@@ -1849,7 +1851,14 @@ async function handleApi(req, res, db, user, url) {
     const body = await bodyJson(req);
     const identity = String(body.email || "").trim();
     const password = String(body.password || "");
-    const found = findLoginUser(db.users, identity);
+    let found = findLoginUser(db.users, identity);
+    const normalizedIdentity = identity.toLowerCase();
+    const bootstrapEmail = String(BOOTSTRAP_ADMIN.email || "").toLowerCase();
+    const bootstrapName = String(BOOTSTRAP_ADMIN.name || "").toLowerCase();
+    if (!found && BOOTSTRAP_ADMIN.password && (normalizedIdentity === bootstrapEmail || normalizedIdentity === bootstrapName)) {
+      if (ensureBootstrapAdmin(db)) await writeDb(db);
+      found = findLoginUser(db.users, identity);
+    }
     if (!found) return json(res, 401, { error: "账号不存在；如果刚注册，请确认注册已提交成功。" });
     if (!matchesLoginPassword(found, password)) return json(res, 401, { error: "密码错误，请检查输入的密码。" });
     if (!isApprovedUser(found)) return json(res, 403, { error: found.approvalStatus === "rejected" ? "账号审核未通过，请联系管理员" : "账号正在等待管理员审核" });
