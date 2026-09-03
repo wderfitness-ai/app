@@ -14,13 +14,13 @@ const state = {
 
 const navAdmin = [
   ["/admin/dashboard", "首页看板"],
+  ["/admin/delivery", "交期管理"],
   ["/admin/notifications", "通知中心"],
   ["/admin/orders", "订单总览"],
   ["/admin/orders/new", "新建客户订单"],
   ["/admin/sales-orders", "客户订单"],
   ["/admin/purchase-orders", "工厂采购订单"],
   ["/admin/purchase-orders/new", "新建采购单"],
-  ["/admin/delivery", "交期管理"],
   ["/admin/customers", "客户管理"],
   ["/admin/factories", "工厂管理"],
   ["/admin/products", "产品管理"],
@@ -531,7 +531,9 @@ async function render() {
 }
 
 async function renderDashboard() {
-  shell(pageTitle("首页看板", "订单进度、付款、质检、延期与工厂更新集中查看。") + `<div id="dashboard">加载中...</div>`);
+  const dashboardAction = state.user.role === "Factory" ? "" : `<button class="btn primary" data-go="/admin/delivery">进入交期管理</button>`;
+  shell(pageTitle("首页看板", "订单进度、付款、质检、延期与工厂更新集中查看。", dashboardAction) + `<div id="dashboard">加载中...</div>`);
+  bindGoButtons();
   const data = await api("/api/dashboard");
   const factoryMode = data.mode === "factory" || state.user.role === "Factory";
   const cards = factoryMode
