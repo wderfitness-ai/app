@@ -1850,7 +1850,7 @@ function reportLines(db, type, idValue, user) {
   ];
 }
 
-async function handleApi(req, res, db, user, url) {
+async function handleApi(req, res, db, user, url, preloadedBody = null) {
   const method = req.method;
   const parts = url.pathname.split("/").filter(Boolean).slice(1);
   const resource = parts[0];
@@ -1858,7 +1858,7 @@ async function handleApi(req, res, db, user, url) {
   const action = parts[2];
 
   if (resource === "login" && method === "POST") {
-    const body = await bodyJson(req);
+    const body = preloadedBody || await bodyJson(req);
     const identity = String(body.email || "").trim();
     const password = String(body.password || "");
     const normalizedIdentity = identity.toLowerCase();
@@ -2889,6 +2889,27 @@ async function appHandler(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (!url.pathname.startsWith("/api/")) return serveStatic(req, res, url);
+    if (url.pathname === "/api/login" && req.method === "POST") {
+      const body = await bodyJson(req);
+      const identity = String(body.email || "").trim().toLowerCase();
+      const password = String(body.password || "");
+      const bootstrapEmail = String(BOOTSTRAP_ADMIN.email || "").toLowerCase();
+      const bootstrapName = String(BOOTSTRAP_ADMIN.name || "").toLowerCase();
+      if (BOOTSTRAP_ADMIN.password && (identity === bootstrapEmail || identity === bootstrapName)) {
+        const found = virtualBootstrapAdmin();
+        if (!matchesLoginPassword(found, password)) return json(res, 401, { error: "密码错误，请检查输入的密码。" });
+        const token = signSessionToken(found.id);
+        return json(res, 200, { user: publicUser(found) }, { "set-cookie": `session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` });
+      }
+      const db = await readDb();
+      return await handleApi(req, res, db, null, url, body);
+    }
+    if (url.pathname === "/api/session" && req.method === "GET") {
+      const userId = verifySessionToken(parseCookies(req).session);
+      if (userId === BOOTSTRAP_ADMIN.id && BOOTSTRAP_ADMIN.password) {
+        return json(res, 200, { user: publicUser(virtualBootstrapAdmin()), orderStatuses: ORDER_STATUS, purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: [] });
+      }
+    }
     const db = await readDb();
     const user = await getUser(req, db);
     return await handleApi(req, res, db, user, url);
