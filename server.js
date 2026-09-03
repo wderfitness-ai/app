@@ -151,8 +151,7 @@ async function readDb() {
   if (USE_BLOB_DB) {
     const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false });
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
-    const changed = ensureDbShape(db);
-    if (!stored || changed) await writeDb(db);
+    ensureDbShape(db);
     return db;
   }
   await ensureDataFile();
