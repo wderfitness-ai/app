@@ -977,6 +977,11 @@ tr:hover td { background: var(--hover); }
   max-height: 220px;
 }
 
+.dashboard-table-scroll.expanded {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .dashboard-table-scroll .table-wrap {
   overflow: visible;
 }

@@ -641,13 +641,17 @@ async function renderDashboard() {
     ? simpleTable(data.recentOrders, ["poNo", "productionStatus", "qcStatus", "factoryDeliveryDate", "purchaseTotalCny"], ["采购单号", "生产状态", "质检", "工厂交期", "采购金额（CNY）"], (row, key) => key === "purchaseTotalCny" ? moneyCny(row[key]) : displayValue(row[key]))
     : simpleTable(data.recentOrders, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate"], ["订单号", "客户", "状态", "付款", "预计交期"]);
   const reminderHtml = data.reminders.map((r) => `<div class="timeline-item reminder-item ${reminderSeverityClass(r.severity)}"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`;
+  const hasManyRecentOrders = data.recentOrders.length > 4;
   const hasManyReminders = data.reminders.length > 4;
   $("#dashboard").innerHTML = `
     <section class="grid cards">${cards.map(([label, value]) => `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("")}</section>
     <section class="split">
       <div class="panel">
-        <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的订单"}</h2>
-        <div class="dashboard-scroll dashboard-table-scroll" data-auto-scroll>${recentTable}</div>
+        <div class="panel-title-row">
+          <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的订单"}</h2>
+          ${hasManyRecentOrders ? `<button class="btn small" id="toggleDashboardRecentOrders" type="button">更多</button>` : ""}
+        </div>
+        <div class="dashboard-scroll dashboard-table-scroll" data-auto-scroll data-seamless-scroll>${recentTable}</div>
       </div>
       <div class="panel">
         <div class="panel-title-row">
@@ -671,6 +675,7 @@ async function renderDashboard() {
   bindDashboardAutoScroll();
   bindGoButtons();
   bindDashboardReminderToggle();
+  bindDashboardRecentOrdersToggle();
 }
 
 function bindDashboardAutoScroll() {
@@ -681,9 +686,10 @@ function bindDashboardAutoScroll() {
     let loopHeight = 0;
     if (container.dataset.seamlessScroll !== undefined) {
       const content = container.firstElementChild;
-      if (content && content.children.length > 1) {
+      const body = content?.matches(".table-wrap") ? content.querySelector("tbody") : content;
+      if (content && body && body.children.length > 1) {
         content.dataset.originalHtml = content.innerHTML;
-        content.insertAdjacentHTML("beforeend", content.dataset.originalHtml);
+        body.insertAdjacentHTML("beforeend", body.innerHTML);
         loopHeight = Math.ceil(content.scrollHeight / 2);
       }
     }
@@ -705,22 +711,35 @@ function bindDashboardAutoScroll() {
   });
 }
 
+function toggleDashboardScrollPanel(button, selector) {
+  const container = $(selector);
+  const content = container?.firstElementChild;
+  if (!container || !content) return;
+  container.classList.toggle("expanded");
+  if (container.classList.contains("expanded")) {
+    content.innerHTML = content.dataset.originalHtml || content.innerHTML;
+    container.scrollTop = 0;
+    button.textContent = "收起";
+    return;
+  }
+  button.textContent = "更多";
+  const body = content.matches(".table-wrap") ? content.querySelector("tbody") : content;
+  if (body && content.dataset.originalHtml) {
+    content.innerHTML = content.dataset.originalHtml;
+    const restoredBody = content.matches(".table-wrap") ? content.querySelector("tbody") : content;
+    restoredBody?.insertAdjacentHTML("beforeend", restoredBody.innerHTML);
+  }
+}
+
+function bindDashboardRecentOrdersToggle() {
+  $("#toggleDashboardRecentOrders")?.addEventListener("click", (event) => {
+    toggleDashboardScrollPanel(event.currentTarget, ".dashboard-table-scroll");
+  });
+}
+
 function bindDashboardReminderToggle() {
   $("#toggleDashboardReminders")?.addEventListener("click", (event) => {
-    const container = $(".dashboard-reminder-scroll");
-    const content = container?.firstElementChild;
-    if (!container || !content) return;
-    container.classList.toggle("expanded");
-    if (container.classList.contains("expanded")) {
-      content.innerHTML = content.dataset.originalHtml || content.innerHTML;
-      container.scrollTop = 0;
-      event.currentTarget.textContent = "收起";
-      return;
-    }
-    event.currentTarget.textContent = "更多";
-    if (content.dataset.originalHtml) {
-      content.innerHTML = content.dataset.originalHtml + content.dataset.originalHtml;
-    }
+    toggleDashboardScrollPanel(event.currentTarget, ".dashboard-reminder-scroll");
   });
 }
 
