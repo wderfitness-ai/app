@@ -641,7 +641,6 @@ async function renderDashboard() {
     ? simpleTable(data.recentOrders, ["poNo", "productionStatus", "qcStatus", "factoryDeliveryDate", "purchaseTotalCny"], ["采购单号", "生产状态", "质检", "工厂交期", "采购金额（CNY）"], (row, key) => key === "purchaseTotalCny" ? moneyCny(row[key]) : displayValue(row[key]))
     : simpleTable(data.recentOrders, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate"], ["订单号", "客户", "状态", "付款", "预计交期"]);
   const reminderHtml = data.reminders.map((r) => `<div class="timeline-item reminder-item ${reminderSeverityClass(r.severity)}"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`;
-  const hasManyRecentOrders = data.recentOrders.length > 4;
   const hasManyReminders = data.reminders.length > 4;
   $("#dashboard").innerHTML = `
     <section class="grid cards">${cards.map(([label, value]) => `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("")}</section>
@@ -649,7 +648,7 @@ async function renderDashboard() {
       <div class="panel">
         <div class="panel-title-row">
           <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的订单"}</h2>
-          ${hasManyRecentOrders ? `<button class="btn small" id="toggleDashboardRecentOrders" type="button">更多</button>` : ""}
+          <button class="btn small" id="toggleDashboardRecentOrders" type="button">更多</button>
         </div>
         <div class="dashboard-scroll dashboard-table-scroll" data-auto-scroll data-seamless-scroll>${recentTable}</div>
       </div>
@@ -733,6 +732,11 @@ function toggleDashboardScrollPanel(button, selector) {
 
 function bindDashboardRecentOrdersToggle() {
   $("#toggleDashboardRecentOrders")?.addEventListener("click", (event) => {
+    const container = $(".dashboard-table-scroll");
+    if (!container || container.scrollHeight <= container.clientHeight + 2) {
+      go(state.user.role === "Factory" ? "/factory/orders" : "/admin/orders");
+      return;
+    }
     toggleDashboardScrollPanel(event.currentTarget, ".dashboard-table-scroll");
   });
 }
