@@ -2895,7 +2895,7 @@ async function serveStatic(req, res, url) {
     const fileStat = await stat(filePath);
     const etag = `"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`;
     const isVersionedAsset = url.pathname.startsWith("/assets/") || ["/favicon.png", "/apple-touch-icon.png"].includes(url.pathname);
-    const cacheControl = ext === ".html"
+    const cacheControl = ext === ".html" || ext === ".css" || ext === ".js"
       ? "no-cache"
       : isVersionedAsset
         ? "public, max-age=31536000, immutable"
