@@ -275,7 +275,8 @@ a {
 .main {
   min-width: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 100vh;
 }
 
 .topbar {
@@ -302,25 +303,40 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
+  height: 38px;
   min-height: 38px;
+  max-height: 38px;
   padding: 8px 24px;
   border-bottom: 1px solid var(--line);
   background: var(--notice-bg);
   color: var(--notice-text);
+  overflow: hidden;
+  contain: layout paint;
 }
 
 .global-announcement strong {
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .announcement-marquee {
   min-width: 0;
+  width: 100%;
   overflow: hidden;
   white-space: nowrap;
+  line-height: 20px;
 }
 
 .announcement-marquee span {
   display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+}
+
+.global-announcement.ready .announcement-marquee span {
+  max-width: none;
   padding-left: 100%;
   animation: announcement-marquee 22s linear infinite;
 }

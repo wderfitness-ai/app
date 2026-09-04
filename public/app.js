@@ -509,19 +509,24 @@ function updateNotificationBadges(count = 0) {
 }
 
 function updateGlobalAnnouncement(data = {}) {
+  const wrapper = $("#globalAnnouncement");
   const target = $("#announcementText");
   if (!target) return;
   const dueOrders = data.deliveryDueToday || [];
   const notifications = data.notifications || [];
+  wrapper?.classList.remove("ready");
   if (dueOrders.length) {
     target.textContent = `今日需发货 ${dueOrders.length} 单：${dueOrders.map((order) => `${order.poNo}${order.factoryName ? `（${order.factoryName}）` : ""}`).join("、")}`;
+    requestAnimationFrame(() => wrapper?.classList.add("ready"));
     return;
   }
   if (notifications.length) {
     target.textContent = notifications.map((item) => `${item.title}：${item.message}`).join("　|　");
+    requestAnimationFrame(() => wrapper?.classList.add("ready"));
     return;
   }
   target.textContent = "今日暂无到期发货订单，通知中心暂无未读消息。";
+  requestAnimationFrame(() => wrapper?.classList.add("ready"));
 }
 
 async function renderNotificationsPage() {
