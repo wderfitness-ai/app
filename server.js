@@ -112,7 +112,13 @@ const EXTRA_STATUS_ZH = {
   "Not Started": "未开始",
   Passed: "通过",
   Failed: "不通过",
-  "Need Rework": "需要返工"
+  "Need Rework": "需要返工",
+  "QC Image": "质检图片",
+  "QC Sample Image": "质检样品图片",
+  "QC Product Image": "质检产品照片",
+  "QC Packing Image": "质检包装照片",
+  "Factory Deposit Voucher": "预付款凭证",
+  "Factory Balance Voucher": "尾款凭证"
 };
 
 async function ensureDataFile() {
@@ -871,6 +877,12 @@ function pdfImageBuffer(source) {
   return null;
 }
 
+function decodeBase64Payload(value) {
+  const raw = String(value || "");
+  const encoded = raw.includes(",") ? raw.split(",", 2)[1] : raw;
+  return Buffer.from(encoded || "", "base64");
+}
+
 function pdfCellText(value, currency, isMoney) {
   if (value && typeof value === "object") return "";
   if (isMoney && (value === "" || value === null || value === undefined)) return "";
@@ -1122,7 +1134,7 @@ async function structuredPdf(title, document, options = {}) {
 }
 
 async function extractPdfText(contentBase64) {
-  return extractPdfTextFromBuffer(Buffer.from(contentBase64, "base64"));
+  return extractPdfTextFromBuffer(decodeBase64Payload(contentBase64));
 }
 
 async function extractPdfTextFromBuffer(buffer) {
@@ -1904,7 +1916,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       await mkdir(FACTORY_LICENSE_DIR, { recursive: true });
       businessLicenseFileName = String(body.businessLicenseFileName).replace(/[^\w.\- \u4e00-\u9fa5]/g, "_");
       businessLicensePath = path.join(FACTORY_LICENSE_DIR, `${Date.now()}_${businessLicenseFileName}`);
-      await writeFile(businessLicensePath, Buffer.from(body.businessLicenseBase64, "base64"));
+      await writeFile(businessLicensePath, decodeBase64Payload(body.businessLicenseBase64));
       factoryId = String(body.factoryId || "");
       if (factoryId && !db.factories.some((factory) => factory.id === factoryId)) return json(res, 400, { error: "Factory account must bind a valid factory" });
       if (!factoryId) {
@@ -2228,7 +2240,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     let extracted;
     let parsed;
     try {
-      pdfBuffer = blobRef ? await readBlobBuffer(blobRef) : Buffer.from(body.contentBase64, "base64");
+      pdfBuffer = blobRef ? await readBlobBuffer(blobRef) : decodeBase64Payload(body.contentBase64);
       extracted = await extractPdfTextFromBuffer(pdfBuffer);
       parsed = parseImportedSalesOrderPdf(extracted.text);
     } catch (error) {
@@ -2652,7 +2664,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     let storedPath = "";
     if (body.contentBase64 && body.fileName) {
       storedPath = path.join(orderDir, body.fileName.replace(/[^\w.\- ]/g, "_"));
-      await writeFile(storedPath, Buffer.from(body.contentBase64, "base64"));
+      await writeFile(storedPath, decodeBase64Payload(body.contentBase64));
     }
     const file = {
       id: id("file"),
@@ -2674,6 +2686,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     const relatedSo = file.salesOrderId
       ? db.sales_orders.find((item) => item.id === file.salesOrderId)
       : relatedPo ? db.sales_orders.find((item) => item.id === relatedPo.salesOrderId) : null;
+    if (relatedPo) addTimeline(db, relatedPo.id, "purchase_order", user, "", "", `上传文件：${statusText(file.fileType) || file.fileType} ${file.fileName || ""}`);
+    if (!relatedPo && relatedSo) addTimeline(db, relatedSo.id, "sales_order", user, "", "", `上传文件：${statusText(file.fileType) || file.fileType} ${file.fileName || ""}`);
     notifyOrderOperation(db, user, "file_uploaded", {
       salesOrder: relatedSo,
       purchaseOrder: relatedPo,
@@ -2691,7 +2705,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     if (!fileBelongsToAccessibleOrder(db, file, user)) return json(res, 403, { error: "Forbidden" });
     let buffer = null;
     if (file.contentBase64) {
-      buffer = Buffer.from(file.contentBase64, "base64");
+      buffer = decodeBase64Payload(file.contentBase64);
     } else if (file.path && existsSync(file.path)) {
       buffer = await readFile(file.path);
     }
@@ -2709,7 +2723,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     if (!file) return json(res, 404, { error: "Not found" });
     if (isDeleted(file)) return json(res, 200, { ok: true, deleted: true });
     if (!fileBelongsToAccessibleOrder(db, file, user)) return json(res, 403, { error: "Forbidden" });
-    if (!["QC Product Image", "QC Packing Image"].includes(file.fileType)) return json(res, 403, { error: "只能删除质检报告里的产品照片或包装照片" });
+    if (!["QC Sample Image", "QC Product Image", "QC Packing Image"].includes(file.fileType)) return json(res, 403, { error: "只能删除质检报告里的样品图片、产品照片或包装照片" });
     const before = { ...file };
     file.deletedAt = now();
     file.deletedBy = user.id;

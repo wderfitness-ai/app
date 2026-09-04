@@ -849,6 +849,29 @@ tr:hover td { background: var(--hover); }
   color: var(--text);
 }
 
+.voucher-upload {
+  width: max-content;
+  margin-top: 6px;
+}
+
+.voucher-upload input {
+  display: none;
+}
+
+.voucher-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.voucher-list a {
+  color: var(--brand);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

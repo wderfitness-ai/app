@@ -99,12 +99,15 @@ const FILE_TYPE_LABELS = {
   "QC Image": "质检图片",
   "QC Product Image": "质检产品照片",
   "QC Packing Image": "质检包装照片",
+  "QC Sample Image": "质检样品图片",
   "Packing Image": "包装图片",
   "Loading Image": "装柜图片",
   "Bill of Lading": "提单",
   Invoice: "发票",
   "Logistics File": "物流文件",
   "Payment Screenshot": "付款截图",
+  "Factory Deposit Voucher": "预付款凭证",
+  "Factory Balance Voucher": "尾款凭证",
   "Other Attachment": "其他附件"
 };
 
@@ -1261,7 +1264,7 @@ function purchaseOrderView(po, factoryMode) {
       ${po.pendingDeliveryChange ? `<div class="notice">交期调整待审核：当前正式交期 ${displayValue(po.factoryDeliveryDate)}，申请交期 ${displayValue(po.pendingDeliveryChange.requestedDate)}。管理员审核通过后才会生效。</div>` : ""}
       <h2>产品明细</h2>
       ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
-      ${purchaseFinanceSummary(po.items)}
+      ${purchaseFinanceSummary(po)}
     </section>
     <section class="split">
       <div class="panel">
@@ -1311,7 +1314,11 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
   </table></div>`;
 }
 
-function purchaseFinanceSummary(items = []) {
+function purchaseFinanceSummary(po = {}) {
+  const items = po.items || [];
+  const files = po.files || [];
+  const depositVouchers = files.filter((file) => file.fileType === "Factory Deposit Voucher");
+  const balanceVouchers = files.filter((file) => file.fileType === "Factory Balance Voucher");
   const total = purchaseTotalAmount(items);
   const deposit = total * 0.3;
   const balance = total - deposit;
@@ -1319,16 +1326,28 @@ function purchaseFinanceSummary(items = []) {
     <h2>财务核算</h2>
     <div class="finance-card-grid">
       ${financeCard("总金额", "purchaseFinanceTotal", total)}
-      ${financeCard("30%预付款金额", "purchaseFinanceDeposit", deposit)}
-      ${financeCard("尾款金额", "purchaseFinanceBalance", balance)}
+      ${financeCard("30%预付款金额", "purchaseFinanceDeposit", deposit, {
+        uploadId: "factoryDepositVoucherInput",
+        hint: "上传入款凭证",
+        files: depositVouchers
+      })}
+      ${financeCard("尾款金额", "purchaseFinanceBalance", balance, {
+        uploadId: "factoryBalanceVoucherInput",
+        hint: "上传付款凭证",
+        files: balanceVouchers
+      })}
     </div>
   </div>`;
 }
 
-function financeCard(label, id, value) {
+function financeCard(label, id, value, options = {}) {
+  const voucherList = (options.files || []).length
+    ? `<div class="voucher-list">${options.files.map((file) => `<a href="${file.downloadUrl || `/api/files/${file.id}/download`}" download="${escapeAttr(file.fileName || "payment-voucher")}">${fileTypeLabel(file.fileType)}：${displayValue(file.fileName)}</a>`).join("")}</div>`
+    : "";
   return `<div class="finance-card">
     <span>${label}</span>
     <strong id="${id}">${moneyCny(value)}</strong>
+    ${options.uploadId ? `<label class="btn small voucher-upload">${options.hint || "上传凭证"}<input id="${options.uploadId}" type="file" accept="image/*,.pdf" multiple></label>${voucherList || `<small class="muted">暂无凭证</small>`}` : ""}
   </div>`;
 }
 
@@ -1353,15 +1372,18 @@ function purchasePaymentStatusField(value) {
 
 function qcPhotoPanel(po) {
   const files = po.files || [];
+  const samplePhotos = files.filter((file) => file.fileType === "QC Sample Image");
   const productPhotos = files.filter((file) => file.fileType === "QC Product Image");
   const packingPhotos = files.filter((file) => file.fileType === "QC Packing Image");
   return `
     <div class="qc-photo-panel">
       <div class="qc-upload-grid">
+        ${qcUploadBox("qcSamplePhotoInput", "质检样品图片", "上传客户确认样、产前样或对照样品照片")}
         ${qcUploadBox("qcProductPhotoInput", "质检产品照片", "上传产品正面、侧面、细节照片")}
         ${qcUploadBox("qcPackingPhotoInput", "质检包装照片", "上传外箱、标签、包装方式照片")}
       </div>
       <div class="qc-gallery-grid">
+        ${fileGallery("样品图片", samplePhotos)}
         ${fileGallery("产品照片", productPhotos)}
         ${fileGallery("包装照片", packingPhotos)}
       </div>
@@ -1433,9 +1455,46 @@ function bindQcPhotoUploads(po, factoryMode) {
       }
     });
   };
+  uploadInput("#qcSamplePhotoInput", "QC Sample Image");
   uploadInput("#qcProductPhotoInput", "QC Product Image");
   uploadInput("#qcPackingPhotoInput", "QC Packing Image");
   bindQcFileDeletes(po, factoryMode);
+}
+
+function bindFinanceVoucherUploads(po, factoryMode) {
+  const uploadInput = (selector, fileType) => {
+    const input = $(selector);
+    if (!input) return;
+    input.addEventListener("change", async () => {
+      const files = [...(input.files || [])];
+      if (!files.length) return;
+      try {
+        for (const file of files) {
+          const isImage = file.type.startsWith("image/");
+          const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+          if (!isImage && !isPdf) throw new Error("凭证仅支持图片或 PDF 文件");
+          const contentBase64 = await fileToUploadBase64(file, { compressImages: isImage, maxRawBytes: 6_000_000 });
+          await api("/api/files", { method: "POST", body: JSON.stringify({
+            salesOrderId: "",
+            purchaseOrderId: po.id,
+            orderNo: po.poNo,
+            fileType,
+            fileName: file.name,
+            contentType: isPdf ? "application/pdf" : "image/jpeg",
+            contentBase64
+          }) });
+        }
+        alert("上传成功");
+        await renderCurrentPurchaseOrder(po, factoryMode);
+      } catch (error) {
+        alert(error.message || "上传失败");
+      } finally {
+        input.value = "";
+      }
+    });
+  };
+  uploadInput("#factoryDepositVoucherInput", "Factory Deposit Voucher");
+  uploadInput("#factoryBalanceVoucherInput", "Factory Balance Voucher");
 }
 
 function bindQcFileDeletes(po, factoryMode) {
@@ -1566,6 +1625,7 @@ function bindPoActions(po, factoryMode) {
     renderPurchaseOrderModal(po.id);
   });
   bindQcPhotoUploads(po, factoryMode);
+  bindFinanceVoucherUploads(po, factoryMode);
   $("#deletePurchaseOrder")?.addEventListener("click", async () => deletePurchaseOrder(po.id, po.poNo, () => go("/admin/purchase-orders")));
   bindFiles(po, true);
 }
