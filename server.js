@@ -459,6 +459,28 @@ function visibleNotifications(db, user) {
     }));
 }
 
+function visibleSalesOrdersForUser(db, user) {
+  return db.sales_orders.filter((so) => !isDeleted(so) && (user.role !== ROLE.SALES || so.salesId === user.id));
+}
+
+function visiblePurchaseOrdersForUser(db, user) {
+  return db.purchase_orders.filter((po) => {
+    if (isDeleted(po)) return false;
+    if (isFactory(user)) return po.factoryId === user.factoryId;
+    if (user.role === ROLE.SALES) return visibleSalesOrdersForUser(db, user).some((so) => so.id === po.salesOrderId);
+    return true;
+  });
+}
+
+function activeDeliveryPurchaseOrders(db, user) {
+  return visiblePurchaseOrdersForUser(db, user).filter((po) => !["Production Completed", "Shipped", "Delivered", "Closed", "Cancelled"].includes(po.productionStatus));
+}
+
+function todayDeliveryPurchaseOrders(db, user) {
+  const todayDate = today();
+  return activeDeliveryPurchaseOrders(db, user).filter((po) => String(po.factoryDeliveryDate || "").slice(0, 10) === todayDate);
+}
+
 function orderNoForPurchase(db, po) {
   return po?.poNo || db.sales_orders.find((so) => so.id === po?.salesOrderId)?.orderNo || "";
 }
@@ -2177,8 +2199,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
   }
 
   if (resource === "dashboard" && method === "GET") {
-    const visibleSales = db.sales_orders.filter((so) => !isDeleted(so) && (user.role !== ROLE.SALES || so.salesId === user.id));
-    const visiblePo = db.purchase_orders.filter((po) => !isDeleted(po) && (!isFactory(user) || po.factoryId === user.factoryId));
+    const visibleSales = visibleSalesOrdersForUser(db, user);
+    const visiblePo = visiblePurchaseOrdersForUser(db, user);
     const month = today().slice(0, 7);
     if (isFactory(user)) {
       const monthPo = visiblePo.filter((po) => po.orderDate.startsWith(month));
@@ -2227,6 +2249,28 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       reminders: createReminderRecords(db).slice(0, 12),
       recentOrders: visibleSales.slice(-8).reverse().map((o) => visibleSalesOrder(db, o, user)),
       recentFactoryUpdates: db.order_timeline.filter((tl) => tl.orderType === "purchase_order").slice(-8).reverse()
+    });
+  }
+
+  if (resource === "nav-summary" && method === "GET") {
+    const notifications = visibleNotifications(db, user);
+    const unreadNotifications = notifications.filter((item) => item.unread);
+    const todayUnreadNotifications = unreadNotifications.filter((item) => String(item.createdAt || "").slice(0, 10) === today());
+    const todayDueOrders = todayDeliveryPurchaseOrders(db, user).map((po) => {
+      const factory = db.factories.find((item) => item.id === po.factoryId);
+      return {
+        id: po.id,
+        poNo: po.poNo,
+        factoryName: factory?.name || "",
+        factoryDeliveryDate: po.factoryDeliveryDate || "",
+        productionStatus: po.productionStatus || ""
+      };
+    });
+    return json(res, 200, {
+      deliveryDueTodayCount: todayDueOrders.length,
+      deliveryDueToday: todayDueOrders.slice(0, 8),
+      unreadNotifications: unreadNotifications.length,
+      notifications: todayUnreadNotifications.slice(0, 8)
     });
   }
 

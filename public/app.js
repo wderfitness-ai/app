@@ -9,6 +9,7 @@ const state = {
   roles: [],
   factories: [],
   notifications: { items: [], unread: 0 },
+  navSummary: { deliveryDueTodayCount: 0, unreadNotifications: 0, deliveryDueToday: [], notifications: [] },
   cache: {},
   dashboardScrollTimers: []
 };
@@ -374,7 +375,7 @@ function shell(content) {
           <div><strong>贸易跟单系统</strong><span>订单与工厂生产管理</span></div>
         </div>
         <div class="nav-section">${isFactory ? "工厂端" : "管理后台"}</div>
-        ${nav.map(([href, label]) => `<a class="nav-link ${pathNow() === href ? "active" : ""}" href="${href}" data-link>${label}<span>›</span></a>`).join("")}
+        ${nav.map(([href, label]) => navLinkHtml(href, label)).join("")}
         ${isFactory ? `
           <div class="factory-sidebar-notice">
             <strong>新采购单处理要求</strong>
@@ -401,6 +402,10 @@ function shell(content) {
             <button class="btn small" id="logoutBtn">退出</button>
           </div>
         </header>
+        <div class="global-announcement" id="globalAnnouncement">
+          <strong>今日提醒</strong>
+          <div class="announcement-marquee"><span id="announcementText">正在加载今日通告...</span></div>
+        </div>
         <main class="page">${content}</main>
       </section>
     </div>`;
@@ -411,12 +416,23 @@ function shell(content) {
   $("#logoutBtn").addEventListener("click", async () => {
     await api("/api/logout", { method: "POST" });
     state.user = null;
+    if (window.__navSummaryTimer) {
+      clearInterval(window.__navSummaryTimer);
+      window.__navSummaryTimer = null;
+    }
     history.pushState(null, "", "/");
     renderLogin();
   });
   bindNotificationMenu();
   bindThemeControls();
   refreshNotifications();
+  refreshNavSummary();
+}
+
+function navLinkHtml(href, label) {
+  const key = href.includes("/delivery") ? "delivery" : href.includes("/notifications") ? "notifications" : "";
+  const badgeId = key ? `navBadge-${key}` : "";
+  return `<a class="nav-link ${pathNow() === href ? "active" : ""}" href="${href}" data-link>${label}${key ? `<span class="nav-badge hidden" id="${badgeId}">0</span>` : ""}<span>›</span></a>`;
 }
 
 function bindNotificationMenu() {
@@ -427,6 +443,7 @@ function bindNotificationMenu() {
   $("#markAllNotificationsRead")?.addEventListener("click", async () => {
     await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
     await refreshNotifications();
+    await refreshNavSummary();
     if (pathNow().endsWith("/notifications")) renderNotificationsPage();
   });
   $("#openNotificationsPage")?.addEventListener("click", () => {
@@ -446,11 +463,7 @@ async function refreshNotifications() {
   try {
     const data = await api("/api/notifications?limit=8");
     state.notifications = data;
-    const badge = $("#notificationBadge");
-    if (badge) {
-      badge.textContent = data.unread;
-      badge.classList.toggle("hidden", !data.unread);
-    }
+    updateNotificationBadges(data.unread);
     const preview = $("#notificationPreview");
     if (preview) preview.innerHTML = notificationListHtml(data.items || [], true);
     bindNotificationClicks();
@@ -458,6 +471,57 @@ async function refreshNotifications() {
     const preview = $("#notificationPreview");
     if (preview) preview.innerHTML = `<p class="muted">通知加载失败</p>`;
   }
+}
+
+async function refreshNavSummary() {
+  if (!state.user) return;
+  try {
+    const data = await api("/api/nav-summary");
+    state.navSummary = data;
+    updateDeliveryNavBadge(data.deliveryDueTodayCount);
+    updateNotificationBadges(data.unreadNotifications);
+    updateGlobalAnnouncement(data);
+    if (!window.__navSummaryTimer) {
+      window.__navSummaryTimer = setInterval(() => {
+        if (state.user) refreshNavSummary();
+      }, 60_000);
+    }
+  } catch {
+    updateGlobalAnnouncement({ deliveryDueToday: [], notifications: [] });
+  }
+}
+
+function updateDeliveryNavBadge(count = 0) {
+  const badge = $("#navBadge-delivery");
+  if (!badge) return;
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("hidden", !count);
+}
+
+function updateNotificationBadges(count = 0) {
+  const value = count > 99 ? "99+" : String(count);
+  ["#notificationBadge", "#navBadge-notifications"].forEach((selector) => {
+    const badge = $(selector);
+    if (!badge) return;
+    badge.textContent = value;
+    badge.classList.toggle("hidden", !count);
+  });
+}
+
+function updateGlobalAnnouncement(data = {}) {
+  const target = $("#announcementText");
+  if (!target) return;
+  const dueOrders = data.deliveryDueToday || [];
+  const notifications = data.notifications || [];
+  if (dueOrders.length) {
+    target.textContent = `今日需发货 ${dueOrders.length} 单：${dueOrders.map((order) => `${order.poNo}${order.factoryName ? `（${order.factoryName}）` : ""}`).join("、")}`;
+    return;
+  }
+  if (notifications.length) {
+    target.textContent = notifications.map((item) => `${item.title}：${item.message}`).join("　|　");
+    return;
+  }
+  target.textContent = "今日暂无到期发货订单，通知中心暂无未读消息。";
 }
 
 async function renderNotificationsPage() {
@@ -470,11 +534,8 @@ async function renderNotificationsPage() {
     await renderNotificationsPage();
   });
   bindNotificationClicks();
-  const badge = $("#notificationBadge");
-  if (badge) {
-    badge.textContent = data.unread;
-    badge.classList.toggle("hidden", !data.unread);
-  }
+  updateNotificationBadges(data.unread);
+  refreshNavSummary();
 }
 
 function notificationListHtml(items = [], compact = false) {
@@ -500,6 +561,7 @@ function bindNotificationClicks() {
       if (type === "sales_order" && entityId) return go(`/admin/orders/${entityId}`);
       if (type === "purchase_order" && entityId) return go(state.user.role === "Factory" ? `/factory/orders/${entityId}` : `/admin/purchase-orders/${entityId}`);
       await refreshNotifications();
+      await refreshNavSummary();
     });
   });
 }
