@@ -1050,11 +1050,159 @@ tr:hover td { background: var(--hover); }
 .factory-shell .sidebar { background: var(--factory-sidebar-bg); }
 .factory-shell .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
+@media (min-width: 981px) and (max-width: 1220px) {
+  .shell {
+    grid-template-columns: 212px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    padding: 14px 10px;
+  }
+
+  .brand {
+    gap: 8px;
+    padding: 8px 6px 14px;
+  }
+
+  .brand-logo-box {
+    width: 54px;
+    height: 30px;
+  }
+
+  .brand strong {
+    font-size: 13px;
+  }
+
+  .brand span,
+  .factory-sidebar-notice p {
+    font-size: 11px;
+  }
+
+  .nav-link {
+    padding: 9px 8px;
+    font-size: 13px;
+  }
+
+  .topbar {
+    height: 58px;
+    padding: 0 16px;
+  }
+
+  .topbar-actions {
+    gap: 8px;
+  }
+
+  .global-announcement {
+    padding: 8px 16px;
+  }
+
+  .page {
+    padding: 18px;
+  }
+
+  .page-title {
+    gap: 12px;
+  }
+
+  .page-title h1 {
+    font-size: 22px;
+  }
+
+  .cards,
+  .factory-shell .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .split {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid,
+  .form-grid,
+  .finance-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .table-wrap {
+    max-width: calc(100vw - 248px);
+  }
+
+  table {
+    min-width: 760px;
+  }
+}
+
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: relative; height: auto; }
+  .sidebar {
+    position: relative;
+    height: auto;
+    max-height: 42vh;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px;
+  }
+  .brand {
+    grid-column: 1 / -1;
+    padding: 6px 6px 10px;
+    margin-bottom: 2px;
+  }
+  .nav-section {
+    grid-column: 1 / -1;
+    margin: 4px 0 0;
+  }
+  .nav-link {
+    min-height: 38px;
+    padding: 9px 10px;
+  }
+  .factory-sidebar-notice {
+    grid-column: 1 / -1;
+    margin: 4px 0 0;
+    padding: 10px;
+  }
   .cards, .split, .detail-grid, .form-grid, .qc-upload-grid, .qc-gallery-grid, .finance-card-grid { grid-template-columns: 1fr; }
-  .topbar { position: relative; padding: 0 14px; }
+  .topbar {
+    position: relative;
+    height: auto;
+    min-height: 58px;
+    padding: 10px 14px;
+    gap: 10px;
+  }
   .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .global-announcement {
+    padding: 8px 14px;
+  }
+  .page-title {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .page-title > div:last-child {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
   .page { padding: 16px; }
+  .table-wrap {
+    max-width: calc(100vw - 32px);
+  }
+  table {
+    min-width: 720px;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 980px) {
+  .cards,
+  .factory-shell .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-grid,
+  .form-grid,
+  .qc-upload-grid,
+  .qc-gallery-grid,
+  .finance-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
