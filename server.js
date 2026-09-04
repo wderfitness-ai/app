@@ -148,6 +148,7 @@ function emptyDb() {
     payments: [],
     reminders: [],
     delivery_change_requests: [],
+    chat_messages: [],
     notifications: [],
     audit_logs: []
   };
@@ -481,8 +482,66 @@ function todayDeliveryPurchaseOrders(db, user) {
   return activeDeliveryPurchaseOrders(db, user).filter((po) => String(po.factoryDeliveryDate || "").slice(0, 10) === todayDate);
 }
 
+function canAccessPurchaseOrder(db, po, user) {
+  if (!po || isDeleted(po) || !user) return false;
+  return visiblePurchaseOrdersForUser(db, user).some((item) => item.id === po.id);
+}
+
 function orderNoForPurchase(db, po) {
   return po?.poNo || db.sales_orders.find((so) => so.id === po?.salesOrderId)?.orderNo || "";
+}
+
+function visibleChatMessages(db, user, purchaseOrderId = "") {
+  const visiblePoIds = new Set(visiblePurchaseOrdersForUser(db, user).map((po) => po.id));
+  return (db.chat_messages || [])
+    .filter((message) => visiblePoIds.has(message.purchaseOrderId) && (!purchaseOrderId || message.purchaseOrderId === purchaseOrderId))
+    .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+}
+
+function chatUnreadCount(db, user) {
+  return visibleChatMessages(db, user)
+    .filter((message) => message.authorId !== user.id && !message.readBy?.includes(user.id))
+    .length;
+}
+
+function publicChatMessage(message) {
+  return {
+    id: message.id,
+    purchaseOrderId: message.purchaseOrderId,
+    poNo: message.poNo || "",
+    authorId: message.authorId || "",
+    authorName: message.authorName || "",
+    authorRole: message.authorRole || "",
+    message: message.message || "",
+    readBy: Array.isArray(message.readBy) ? message.readBy : [],
+    createdAt: message.createdAt || ""
+  };
+}
+
+function chatThreadsForUser(db, user) {
+  const messages = visibleChatMessages(db, user);
+  const byPo = new Map();
+  for (const message of messages) {
+    byPo.set(message.purchaseOrderId, message);
+  }
+  return visiblePurchaseOrdersForUser(db, user)
+    .map((po) => {
+      const factory = db.factories.find((item) => item.id === po.factoryId);
+      const salesOrder = db.sales_orders.find((item) => item.id === po.salesOrderId);
+      const lastMessage = byPo.get(po.id);
+      return {
+        purchaseOrderId: po.id,
+        poNo: po.poNo,
+        salesOrderNumber: isFactory(user) ? "" : salesOrder?.orderNo || "",
+        factoryName: factory?.name || "",
+        productionStatus: po.productionStatus,
+        factoryDeliveryDate: po.factoryDeliveryDate || "",
+        lastMessage: lastMessage?.message || "",
+        lastMessageAt: lastMessage?.createdAt || po.updatedAt || po.createdAt || "",
+        unread: messages.filter((message) => message.purchaseOrderId === po.id && message.authorId !== user.id && !message.readBy?.includes(user.id)).length
+      };
+    })
+    .sort((a, b) => String(b.lastMessageAt || "").localeCompare(String(a.lastMessageAt || "")));
 }
 
 function notifyOrderOperation(db, user, type, payload = {}) {
@@ -2026,6 +2085,89 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     }
   }
 
+  if (resource === "chats") {
+    if (method === "GET") {
+      const purchaseOrderId = url.searchParams.get("purchaseOrderId") || resourceId || "";
+      const threads = chatThreadsForUser(db, user);
+      if (!purchaseOrderId) {
+        return json(res, 200, {
+          threads,
+          unread: chatUnreadCount(db, user)
+        });
+      }
+      const po = db.purchase_orders.find((item) => item.id === purchaseOrderId);
+      if (!canAccessPurchaseOrder(db, po, user)) return json(res, 403, { error: "Forbidden" });
+      for (const message of db.chat_messages || []) {
+        if (message.purchaseOrderId !== purchaseOrderId || message.authorId === user.id) continue;
+        message.readBy = Array.isArray(message.readBy) ? message.readBy : [];
+        if (!message.readBy.includes(user.id)) message.readBy.push(user.id);
+      }
+      await writeDb(db);
+      const updatedThreads = chatThreadsForUser(db, user);
+      return json(res, 200, {
+        thread: updatedThreads.find((thread) => thread.purchaseOrderId === purchaseOrderId) || null,
+        messages: visibleChatMessages(db, user, purchaseOrderId).map(publicChatMessage),
+        unread: chatUnreadCount(db, user)
+      });
+    }
+    if (method === "POST") {
+      db.chat_messages ||= [];
+      const body = await bodyJson(req);
+      const purchaseOrderId = String(body.purchaseOrderId || resourceId || "");
+      const content = String(body.message || "").trim();
+      const po = db.purchase_orders.find((item) => item.id === purchaseOrderId);
+      if (!canAccessPurchaseOrder(db, po, user)) return json(res, 403, { error: "Forbidden" });
+      if (!content) return json(res, 400, { error: "留言内容不能为空" });
+      if (content.length > 1000) return json(res, 400, { error: "留言内容不能超过 1000 个字" });
+      const salesOrder = db.sales_orders.find((item) => item.id === po.salesOrderId);
+      const message = {
+        id: id("chat"),
+        purchaseOrderId: po.id,
+        poNo: po.poNo,
+        salesOrderId: po.salesOrderId || "",
+        factoryId: po.factoryId || "",
+        authorId: user.id,
+        authorName: user.name,
+        authorRole: user.role,
+        message: content,
+        readBy: [user.id],
+        createdAt: now()
+      };
+      db.chat_messages.unshift(message);
+      if (db.chat_messages.length > 2000) db.chat_messages.length = 2000;
+      addTimeline(db, po.id, "purchase_order", user, po.productionStatus, po.productionStatus, `新增订单留言：${content.slice(0, 80)}`);
+      audit(db, user, "chat_message", message.id, "create", null, { ...message, message: content.slice(0, 200) });
+      if (isFactory(user)) {
+        notify(db, {
+          actor: user,
+          title: "工厂新增订单留言",
+          message: `工厂在采购单 ${po.poNo} 留言：${content.slice(0, 80)}`,
+          entityType: "purchase_order",
+          entityId: po.id,
+          orderNo: po.poNo,
+          roles: [ROLE.ADMIN, ROLE.MERCH],
+          userIds: salesOrder?.salesId ? [salesOrder.salesId] : [],
+          factoryId: po.factoryId,
+          severity: "info"
+        });
+      } else {
+        notify(db, {
+          actor: user,
+          title: "采购单有新留言",
+          message: `${user.name} 在采购单 ${po.poNo} 留言：${content.slice(0, 80)}`,
+          entityType: "purchase_order",
+          entityId: po.id,
+          orderNo: po.poNo,
+          roles: [ROLE.FACTORY],
+          factoryId: po.factoryId,
+          severity: "info"
+        });
+      }
+      await writeDb(db);
+      return json(res, 201, { message: publicChatMessage(message), unread: chatUnreadCount(db, user) });
+    }
+  }
+
   if (resource === "delivery-change-requests") {
     db.delivery_change_requests ||= [];
     if (method === "GET") {
@@ -2270,6 +2412,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       deliveryDueTodayCount: todayDueOrders.length,
       deliveryDueToday: todayDueOrders.slice(0, 8),
       unreadNotifications: unreadNotifications.length,
+      unreadChats: chatUnreadCount(db, user),
       notifications: todayUnreadNotifications.slice(0, 8)
     });
   }

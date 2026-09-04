@@ -9,7 +9,7 @@ const state = {
   roles: [],
   factories: [],
   notifications: { items: [], unread: 0 },
-  navSummary: { deliveryDueTodayCount: 0, unreadNotifications: 0, deliveryDueToday: [], notifications: [] },
+  navSummary: { deliveryDueTodayCount: 0, unreadNotifications: 0, unreadChats: 0, deliveryDueToday: [], notifications: [] },
   cache: {},
   dashboardScrollTimers: []
 };
@@ -18,6 +18,7 @@ const navAdmin = [
   ["/admin/dashboard", "首页看板"],
   ["/admin/delivery", "交期管理"],
   ["/admin/notifications", "通知中心"],
+  ["/admin/chats", "订单沟通"],
   ["/admin/orders", "订单总览"],
   ["/admin/orders/new", "新建客户订单"],
   ["/admin/sales-orders", "客户订单"],
@@ -35,6 +36,7 @@ const navAdmin = [
 const navFactory = [
   ["/factory/dashboard", "工厂看板"],
   ["/factory/notifications", "通知中心"],
+  ["/factory/chats", "订单沟通"],
   ["/factory/delivery", "交期管理"],
   ["/factory/orders", "我的采购订单"]
 ];
@@ -430,7 +432,7 @@ function shell(content) {
 }
 
 function navLinkHtml(href, label) {
-  const key = href.includes("/delivery") ? "delivery" : href.includes("/notifications") ? "notifications" : "";
+  const key = href.includes("/delivery") ? "delivery" : href.includes("/notifications") ? "notifications" : href.includes("/chats") ? "chats" : "";
   const badgeId = key ? `navBadge-${key}` : "";
   return `<a class="nav-link ${pathNow() === href ? "active" : ""}" href="${href}" data-link>${label}${key ? `<span class="nav-badge hidden" id="${badgeId}">0</span>` : ""}<span>›</span></a>`;
 }
@@ -480,6 +482,7 @@ async function refreshNavSummary() {
     state.navSummary = data;
     updateDeliveryNavBadge(data.deliveryDueTodayCount);
     updateNotificationBadges(data.unreadNotifications);
+    updateChatNavBadge(data.unreadChats);
     updateGlobalAnnouncement(data);
     if (!window.__navSummaryTimer) {
       window.__navSummaryTimer = setInterval(() => {
@@ -506,6 +509,13 @@ function updateNotificationBadges(count = 0) {
     badge.textContent = value;
     badge.classList.toggle("hidden", !count);
   });
+}
+
+function updateChatNavBadge(count = 0) {
+  const badge = $("#navBadge-chats");
+  if (!badge) return;
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("hidden", !count);
 }
 
 function updateGlobalAnnouncement(data = {}) {
@@ -586,6 +596,7 @@ async function render() {
   if (state.user.role === "Factory" && !path.startsWith("/factory")) return go("/factory/dashboard");
   if (path === "/admin/dashboard" || path === "/factory/dashboard") return renderDashboard();
   if (path === "/admin/notifications" || path === "/factory/notifications") return renderNotificationsPage();
+  if (path === "/admin/chats" || path === "/factory/chats") return renderChatsPage();
   if (path === "/admin/delivery" || path === "/factory/delivery") return renderDeliveryManagement();
   if (path === "/admin/orders" || path === "/admin/sales-orders") return renderSalesOrders();
   if (path === "/admin/orders/new") return renderNewSalesOrder();
@@ -850,7 +861,7 @@ async function loadPurchaseOrders() {
     ${simpleTable(data.items, ["poNo", "factoryName", "productionStatus", "qcStatus", "factoryPaymentStatus", "factoryDeliveryDate", "purchaseTotalCny", "actions"], ["采购单号", "工厂", "生产状态", "质检", "工厂付款", "工厂交期", "采购金额（CNY）", "操作"], (row, key) => {
       if (["productionStatus", "qcStatus", "factoryPaymentStatus"].includes(key)) return tag(row[key], row[key]);
       if (key === "purchaseTotalCny") return moneyCny(row[key]);
-      if (key === "actions") return `<button class="btn small" data-po="${row.id}">快速查看</button>${state.user.role === "Admin" ? ` <button class="btn small danger" data-delete-purchase-order="${row.id}" data-order-no="${row.poNo}">归档</button>` : ""}`;
+      if (key === "actions") return `<button class="btn small" data-po="${row.id}">快速查看</button> <button class="btn small" data-chat-po="${row.id}">留言</button>${state.user.role === "Admin" ? ` <button class="btn small danger" data-delete-purchase-order="${row.id}" data-order-no="${row.poNo}">归档</button>` : ""}`;
       return displayValue(row[key]);
     })}
     ${pager(data, loadPurchaseOrders)}`;
@@ -858,7 +869,100 @@ async function loadPurchaseOrders() {
     if (state.user.role === "Factory") go(`/factory/orders/${btn.dataset.po}`);
     else renderPurchaseOrderModal(btn.dataset.po);
   }));
+  $$("[data-chat-po]").forEach((btn) => btn.addEventListener("click", () => renderChatsPage(btn.dataset.chatPo)));
   bindPurchaseOrderDeleteButtons();
+}
+
+async function renderChatsPage(selectedPurchaseOrderId = "") {
+  const factoryMode = state.user.role === "Factory";
+  shell(pageTitle("订单沟通", factoryMode ? "按采购单与贸易公司沟通交期、价格、生产、质检和发货问题。" : "按采购单与对应工厂沟通交期、价格、生产、质检和发货问题。") + `
+    <section class="panel">
+      <div class="chat-layout">
+        <div class="chat-thread-list" id="chatThreadList">加载中...</div>
+        <div class="chat-panel" id="chatPanel">请选择一个采购单开始沟通。</div>
+      </div>
+    </section>`);
+  await loadChatThreads(selectedPurchaseOrderId);
+}
+
+async function loadChatThreads(selectedPurchaseOrderId = "") {
+  const data = await api("/api/chats");
+  const threads = data.threads || [];
+  const activeId = selectedPurchaseOrderId || threads[0]?.purchaseOrderId || "";
+  $("#chatThreadList").innerHTML = threads.length
+    ? threads.map((thread) => chatThreadHtml(thread, activeId)).join("")
+    : `<p class="muted">暂无可沟通的采购单</p>`;
+  $$("[data-open-chat]").forEach((btn) => btn.addEventListener("click", () => loadChatThreads(btn.dataset.openChat)));
+  if (activeId) await loadChatMessages(activeId);
+  else $("#chatPanel").innerHTML = `<p class="muted">暂无采购单</p>`;
+  updateChatNavBadge(data.unread || 0);
+}
+
+function chatThreadHtml(thread, activeId) {
+  return `<button class="chat-thread ${thread.purchaseOrderId === activeId ? "active" : ""}" type="button" data-open-chat="${thread.purchaseOrderId}">
+    <strong>${escapeHtml(thread.poNo || "未命名采购单")}${thread.unread ? `<span class="nav-badge">${thread.unread > 99 ? "99+" : thread.unread}</span>` : ""}</strong>
+    <span>${escapeHtml(thread.factoryName || "未绑定工厂")} · ${statusLabel(thread.productionStatus)}</span>
+    <small>${thread.lastMessage ? escapeHtml(thread.lastMessage) : "暂无留言"}${thread.lastMessageAt ? ` · ${formatChinaDateTime(thread.lastMessageAt)}` : ""}</small>
+  </button>`;
+}
+
+async function loadChatMessages(purchaseOrderId) {
+  const data = await api(`/api/chats?purchaseOrderId=${encodeURIComponent(purchaseOrderId)}`);
+  $("#chatPanel").innerHTML = chatPanelHtml(data.thread, data.messages || []);
+  bindChatComposer(purchaseOrderId);
+  updateChatNavBadge(data.unread || 0);
+  refreshNavSummary();
+  const body = $(".chat-messages");
+  if (body) body.scrollTop = body.scrollHeight;
+}
+
+function chatPanelHtml(thread, messages) {
+  if (!thread) return `<p class="muted">采购单不存在或无权限查看。</p>`;
+  return `
+    <div class="chat-panel-head">
+      <div>
+        <h2>${escapeHtml(thread.poNo)}</h2>
+        <p>${escapeHtml(thread.factoryName || "工厂")} · 交期 ${escapeHtml(thread.factoryDeliveryDate || "-")}</p>
+      </div>
+      <button class="btn small" data-po="${thread.purchaseOrderId}">查看订单</button>
+    </div>
+    <div class="chat-messages">
+      ${messages.length ? messages.map(chatMessageHtml).join("") : `<p class="muted">暂无留言，输入内容后可与对方沟通。</p>`}
+    </div>
+    <form class="chat-compose" id="chatCompose">
+      <textarea class="input" id="chatMessageInput" rows="3" maxlength="1000" placeholder="输入留言，例如：请确认交期、单价、包装方式或质检问题。"></textarea>
+      <button class="btn primary" type="submit">发送留言</button>
+    </form>`;
+}
+
+function chatMessageHtml(message) {
+  const own = message.authorId === state.user.id;
+  return `<div class="chat-message ${own ? "own" : ""}">
+    <div class="chat-bubble">
+      <div class="chat-meta">${escapeHtml(message.authorName || "用户")} · ${roleLabel(message.authorRole)} · ${formatChinaDateTime(message.createdAt)}</div>
+      <div>${escapeHtml(message.message || "")}</div>
+    </div>
+  </div>`;
+}
+
+function bindChatComposer(purchaseOrderId) {
+  $("#chatCompose")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = $("#chatMessageInput");
+    const message = String(input?.value || "").trim();
+    if (!message) return alert("请输入留言内容");
+    await api("/api/chats", {
+      method: "POST",
+      body: JSON.stringify({ purchaseOrderId, message })
+    });
+    input.value = "";
+    await loadChatMessages(purchaseOrderId);
+    alert("留言已发送");
+  });
+  $$("[data-po]", $("#chatPanel")).forEach((btn) => btn.addEventListener("click", () => {
+    if (state.user.role === "Factory") return go(`/factory/orders/${btn.dataset.po}`);
+    return renderPurchaseOrderModal(btn.dataset.po);
+  }));
 }
 
 async function renderDeliveryManagement() {
@@ -1353,7 +1457,7 @@ async function renderSalesOrderDetail(id) {
           <select class="select" id="factorySelect">${factories.items.map((f) => `<option value="${f.id}">${f.name}</option>`).join("")}</select>
           <button class="btn primary" id="makePo">从客户订单生成采购单</button>
         </div>
-        ${simpleTable(order.purchaseOrders, ["poNo", "factoryName", "productionStatus", "qcStatus", "actions"], ["采购单号", "工厂", "生产状态", "质检", "操作"], (row, key) => key === "actions" ? `<button class="btn small" data-po="${row.id}">查看</button>` : displayValue(row[key]))}
+        ${simpleTable(order.purchaseOrders, ["poNo", "factoryName", "productionStatus", "qcStatus", "actions"], ["采购单号", "工厂", "生产状态", "质检", "操作"], (row, key) => key === "actions" ? `<button class="btn small" data-po="${row.id}">查看</button> <button class="btn small" data-chat-po="${row.id}">留言</button>` : displayValue(row[key]))}
       </div>
       <div class="panel">
         <h2>订单时间线</h2>
@@ -1379,6 +1483,7 @@ async function renderSalesOrderDetail(id) {
   });
   bindFiles(order);
   $$("[data-po]").forEach((btn) => btn.addEventListener("click", () => renderPurchaseOrderModal(btn.dataset.po)));
+  $$("[data-chat-po]").forEach((btn) => btn.addEventListener("click", () => renderChatsPage(btn.dataset.chatPo)));
 }
 
 async function renderPurchaseOrderDetail(id) {
@@ -1422,6 +1527,13 @@ function purchaseOrderView(po, factoryMode) {
       <h2>产品明细</h2>
       ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
       ${purchaseFinanceSummary(po)}
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-title-row">
+        <h2>订单留言</h2>
+        <button class="btn primary" type="button" data-chat-po="${po.id}">进入订单沟通</button>
+      </div>
+      <p class="muted">围绕当前采购单与工厂沟通交期、单价、生产、质检、包装和发货问题。</p>
     </section>
     <section class="split">
       <div class="panel">
@@ -1669,6 +1781,7 @@ function bindQcFileDeletes(po, factoryMode) {
 }
 
 function bindPoActions(po, factoryMode) {
+  $$("[data-chat-po]").forEach((btn) => btn.addEventListener("click", () => renderChatsPage(btn.dataset.chatPo)));
   const readPoQuantity = (row) => Number($(".po-edit-qty", row)?.value ?? row.dataset.poQty ?? 0);
   const updateFinanceSummary = () => {
     const total = $$("[data-po-item-id]").reduce((sumValue, row) => {
@@ -2116,6 +2229,10 @@ function escapeAttr(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function escapeHtml(value) {
+  return escapeAttr(value);
 }
 
 function tag(label, status = "") {
