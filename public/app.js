@@ -930,34 +930,117 @@ function chatPanelHtml(thread, messages) {
       ${messages.length ? messages.map(chatMessageHtml).join("") : `<p class="muted">暂无留言，输入内容后可与对方沟通。</p>`}
     </div>
     <form class="chat-compose" id="chatCompose">
-      <textarea class="input" id="chatMessageInput" rows="3" maxlength="1000" placeholder="输入留言，例如：请确认交期、单价、包装方式或质检问题。"></textarea>
-      <button class="btn primary" type="submit">发送留言</button>
+      <div class="chat-compose-main">
+        <textarea class="input" id="chatMessageInput" rows="3" maxlength="1000" placeholder="输入留言，例如：请确认交期、单价、包装方式或质检问题。"></textarea>
+        <div class="chat-attachment-list muted" id="chatAttachmentList">未选择附件</div>
+      </div>
+      <div class="chat-compose-actions">
+        <label class="btn small chat-attach-btn">
+          添加附件
+          <input id="chatAttachmentInput" type="file" multiple accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.svg,.tif,.tiff,.heic,.heif">
+        </label>
+        <button class="btn primary" id="chatSendButton" type="submit">发送留言</button>
+      </div>
     </form>`;
 }
 
 function chatMessageHtml(message) {
   const own = message.authorId === state.user.id;
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   return `<div class="chat-message ${own ? "own" : ""}">
     <div class="chat-bubble">
       <div class="chat-meta">${escapeHtml(message.authorName || "用户")} · ${roleLabel(message.authorRole)} · ${formatChinaDateTime(message.createdAt)}</div>
-      <div>${escapeHtml(message.message || "")}</div>
+      ${message.message ? `<div>${escapeHtml(message.message || "")}</div>` : ""}
+      ${attachments.length ? `<div class="chat-attachments">${attachments.map(chatAttachmentHtml).join("")}</div>` : ""}
     </div>
   </div>`;
 }
 
+function isImageFile(file) {
+  return Boolean(file?.isImage || String(file?.contentType || "").startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp|svg|tiff?|heic|heif)$/i.test(file?.fileName || ""));
+}
+
+function chatAttachmentHtml(file) {
+  const name = escapeHtml(file.fileName || "附件");
+  const url = escapeAttr(file.downloadUrl || "#");
+  if (isImageFile(file)) {
+    return `<a class="chat-attachment-card image" href="${url}" download>
+      <img src="${url}?preview=1" alt="${name}" loading="lazy">
+      <span>${name}</span>
+    </a>`;
+  }
+  return `<a class="chat-attachment-card file" href="${url}" download>
+    <strong>PDF</strong>
+    <span>${name}</span>
+  </a>`;
+}
+
 function bindChatComposer(purchaseOrderId) {
+  let selectedFiles = [];
+  const fileInput = $("#chatAttachmentInput");
+  const attachmentList = $("#chatAttachmentList");
+  const sendButton = $("#chatSendButton");
+
+  const renderSelectedFiles = () => {
+    if (!attachmentList) return;
+    if (!selectedFiles.length) {
+      attachmentList.classList.add("muted");
+      attachmentList.innerHTML = "未选择附件";
+      return;
+    }
+    attachmentList.classList.remove("muted");
+    attachmentList.innerHTML = selectedFiles.map((file, index) => `
+      <span class="chat-attachment-chip">
+        ${escapeHtml(file.name)}
+        <button type="button" data-remove-chat-file="${index}" aria-label="移除附件 ${escapeAttr(file.name)}">×</button>
+      </span>
+    `).join("");
+    $$("[data-remove-chat-file]", attachmentList).forEach((btn) => btn.addEventListener("click", () => {
+      selectedFiles.splice(Number(btn.dataset.removeChatFile), 1);
+      renderSelectedFiles();
+    }));
+  };
+
+  fileInput?.addEventListener("change", () => {
+    selectedFiles = [...selectedFiles, ...Array.from(fileInput.files || [])].slice(0, 6);
+    fileInput.value = "";
+    renderSelectedFiles();
+  });
+
   $("#chatCompose")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const input = $("#chatMessageInput");
     const message = String(input?.value || "").trim();
-    if (!message) return alert("请输入留言内容");
-    await api("/api/chats", {
-      method: "POST",
-      body: JSON.stringify({ purchaseOrderId, message })
-    });
-    input.value = "";
-    await loadChatMessages(purchaseOrderId);
-    alert("留言已发送");
+    if (!message && !selectedFiles.length) return alert("请输入留言内容或选择附件");
+    try {
+      if (sendButton) {
+        sendButton.disabled = true;
+        sendButton.textContent = "发送中...";
+      }
+      const attachments = [];
+      for (const file of selectedFiles) {
+        const isAllowed = file.type === "application/pdf" || file.type.startsWith("image/") || /\.(pdf|jpe?g|png|webp|gif|bmp|svg|tiff?|heic|heif)$/i.test(file.name);
+        if (!isAllowed) throw new Error("留言附件仅支持 PDF 和图片格式");
+        const canCompress = /^image\/(jpeg|jpg|png|webp|bmp)$/i.test(file.type);
+        const contentBase64 = await fileToUploadBase64(file, { compressImages: canCompress, maxRawBytes: 8_000_000 });
+        attachments.push({ fileName: file.name, contentType: file.type || "application/octet-stream", contentBase64 });
+      }
+      await api("/api/chats", {
+        method: "POST",
+        body: JSON.stringify({ purchaseOrderId, message, attachments })
+      });
+      input.value = "";
+      selectedFiles = [];
+      renderSelectedFiles();
+      await loadChatMessages(purchaseOrderId);
+    } catch (error) {
+      alert(error.message || "发送失败");
+    } finally {
+      if (sendButton) {
+        sendButton.disabled = false;
+        sendButton.textContent = "发送留言";
+      }
+    }
   });
   $$("[data-po]", $("#chatPanel")).forEach((btn) => btn.addEventListener("click", () => {
     if (state.user.role === "Factory") return go(`/factory/orders/${btn.dataset.po}`);

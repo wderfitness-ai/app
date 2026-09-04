@@ -509,7 +509,16 @@ function chatUnreadCount(db, user) {
     .length;
 }
 
-function publicChatMessage(message) {
+function chatAttachmentFiles(db, message) {
+  const fileIds = Array.isArray(message.attachmentFileIds) ? message.attachmentFileIds : [];
+  if (!fileIds.length) return [];
+  const wanted = new Set(fileIds);
+  return (db.order_files || [])
+    .filter((file) => wanted.has(file.id) && !isDeleted(file))
+    .map(enrichOrderFile);
+}
+
+function publicChatMessage(db, message) {
   return {
     id: message.id,
     purchaseOrderId: message.purchaseOrderId,
@@ -518,6 +527,7 @@ function publicChatMessage(message) {
     authorName: message.authorName || "",
     authorRole: message.authorRole || "",
     message: message.message || "",
+    attachments: chatAttachmentFiles(db, message),
     readBy: Array.isArray(message.readBy) ? message.readBy : [],
     createdAt: message.createdAt || ""
   };
@@ -541,7 +551,7 @@ function chatThreadsForUser(db, user) {
         factoryName: factory?.name || "",
         productionStatus: po.productionStatus,
         factoryDeliveryDate: po.factoryDeliveryDate || "",
-        lastMessage: lastMessage?.message || "",
+        lastMessage: lastMessage?.message || (lastMessage?.attachmentFileIds?.length ? "发送了附件" : ""),
         lastMessageAt: lastMessage?.createdAt || po.updatedAt || po.createdAt || "",
         unread: messages.filter((message) => message.purchaseOrderId === po.id && message.authorId !== user.id && !message.readBy?.includes(user.id)).length
       };
@@ -967,6 +977,50 @@ function decodeBase64Payload(value) {
   const raw = String(value || "");
   const encoded = raw.includes(",") ? raw.split(",", 2)[1] : raw;
   return Buffer.from(encoded || "", "base64");
+}
+
+function safeUploadedFileName(fileName) {
+  return String(fileName || "attachment")
+    .trim()
+    .replace(/[^\w.\- \u4e00-\u9fa5]/g, "_")
+    .slice(0, 180) || "attachment";
+}
+
+function isAllowedChatAttachment(fileName, contentType) {
+  const type = String(contentType || "").toLowerCase();
+  const ext = path.extname(String(fileName || "")).toLowerCase();
+  const imageExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg", ".tif", ".tiff", ".heic", ".heif"]);
+  return type === "application/pdf" || ext === ".pdf" || type.startsWith("image/") || imageExts.has(ext);
+}
+
+async function createOrderFileRecord(db, user, payload) {
+  const safeFileName = safeUploadedFileName(payload.fileName);
+  const orderNo = String(payload.orderNo || "unassigned");
+  const orderDir = path.join(UPLOAD_DIR, orderNo.replace(/[^a-zA-Z0-9_-]/g, "_"));
+  await mkdir(orderDir, { recursive: true });
+  let storedPath = "";
+  if (payload.contentBase64 && safeFileName) {
+    storedPath = path.join(orderDir, safeFileName);
+    await writeFile(storedPath, decodeBase64Payload(payload.contentBase64));
+  }
+  const file = {
+    id: id("file"),
+    salesOrderId: payload.salesOrderId || "",
+    purchaseOrderId: payload.purchaseOrderId || "",
+    fileType: payload.fileType || "Other Attachment",
+    fileName: safeFileName,
+    contentType: payload.contentType || "application/octet-stream",
+    contentBase64: payload.contentBase64 || "",
+    path: storedPath,
+    uploadedBy: user.id,
+    uploadedByName: user.name,
+    createdAt: now()
+  };
+  db.order_files ||= [];
+  db.order_files.push(file);
+  const { contentBase64, ...fileAudit } = file;
+  audit(db, user, "order_file", file.id, "create", null, fileAudit);
+  return file;
 }
 
 function pdfCellText(value, currency, isMoney) {
@@ -2111,7 +2165,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       const updatedThreads = chatThreadsForUser(db, user);
       return json(res, 200, {
         thread: updatedThreads.find((thread) => thread.purchaseOrderId === purchaseOrderId) || null,
-        messages: visibleChatMessages(db, user, purchaseOrderId).map(publicChatMessage),
+        messages: visibleChatMessages(db, user, purchaseOrderId).map((message) => publicChatMessage(db, message)),
         unread: chatUnreadCount(db, user)
       });
     }
@@ -2120,11 +2174,38 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       const body = await bodyJson(req);
       const purchaseOrderId = String(body.purchaseOrderId || resourceId || "");
       const content = String(body.message || "").trim();
+      const attachments = Array.isArray(body.attachments) ? body.attachments : [];
       const po = db.purchase_orders.find((item) => item.id === purchaseOrderId);
       if (!canAccessPurchaseOrder(db, po, user)) return json(res, 403, { error: "Forbidden" });
-      if (!content) return json(res, 400, { error: "留言内容不能为空" });
+      if (!content && !attachments.length) return json(res, 400, { error: "请输入留言内容或选择附件" });
       if (content.length > 1000) return json(res, 400, { error: "留言内容不能超过 1000 个字" });
+      if (attachments.length > 6) return json(res, 400, { error: "单次最多发送 6 个附件" });
       const salesOrder = db.sales_orders.find((item) => item.id === po.salesOrderId);
+      for (const attachment of attachments) {
+        const fileName = String(attachment.fileName || "").trim();
+        const contentBase64 = String(attachment.contentBase64 || "");
+        const contentType = String(attachment.contentType || "application/octet-stream").trim();
+        if (!fileName || !contentBase64) return json(res, 400, { error: "附件信息不完整" });
+        if (!isAllowedChatAttachment(fileName, contentType)) return json(res, 400, { error: "留言附件仅支持 PDF 和图片格式" });
+      }
+      const attachmentRecords = [];
+      for (const attachment of attachments) {
+        const fileName = String(attachment.fileName || "").trim();
+        const contentBase64 = String(attachment.contentBase64 || "");
+        const contentType = String(attachment.contentType || "application/octet-stream").trim();
+        const file = await createOrderFileRecord(db, user, {
+          salesOrderId: po.salesOrderId || "",
+          purchaseOrderId: po.id,
+          orderNo: po.poNo,
+          fileType: "Chat Attachment",
+          fileName,
+          contentType,
+          contentBase64
+        });
+        attachmentRecords.push(file);
+      }
+      const attachmentSummary = attachmentRecords.length ? `，附件 ${attachmentRecords.length} 个` : "";
+      const summaryText = content || "发送了附件";
       const message = {
         id: id("chat"),
         purchaseOrderId: po.id,
@@ -2135,18 +2216,19 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         authorName: user.name,
         authorRole: user.role,
         message: content,
+        attachmentFileIds: attachmentRecords.map((file) => file.id),
         readBy: [user.id],
         createdAt: now()
       };
       db.chat_messages.unshift(message);
       if (db.chat_messages.length > 2000) db.chat_messages.length = 2000;
-      addTimeline(db, po.id, "purchase_order", user, po.productionStatus, po.productionStatus, `新增订单留言：${content.slice(0, 80)}`);
+      addTimeline(db, po.id, "purchase_order", user, po.productionStatus, po.productionStatus, `新增订单留言：${summaryText.slice(0, 80)}${attachmentSummary}`);
       audit(db, user, "chat_message", message.id, "create", null, { ...message, message: content.slice(0, 200) });
       if (isFactory(user)) {
         notify(db, {
           actor: user,
           title: "工厂新增订单留言",
-          message: `工厂在采购单 ${po.poNo} 留言：${content.slice(0, 80)}`,
+          message: `工厂在采购单 ${po.poNo} 留言：${summaryText.slice(0, 80)}${attachmentSummary}`,
           entityType: "purchase_order",
           entityId: po.id,
           orderNo: po.poNo,
@@ -2159,7 +2241,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         notify(db, {
           actor: user,
           title: "采购单有新留言",
-          message: `${user.name} 在采购单 ${po.poNo} 留言：${content.slice(0, 80)}`,
+          message: `${user.name} 在采购单 ${po.poNo} 留言：${summaryText.slice(0, 80)}${attachmentSummary}`,
           entityType: "purchase_order",
           entityId: po.id,
           orderNo: po.poNo,
@@ -2169,7 +2251,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         });
       }
       await writeDb(db);
-      return json(res, 201, { message: publicChatMessage(message), unread: chatUnreadCount(db, user) });
+      return json(res, 201, { message: publicChatMessage(db, message), unread: chatUnreadCount(db, user) });
     }
   }
 
@@ -2887,30 +2969,15 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       if (isFactory(user) && po.factoryId !== user.factoryId) return json(res, 403, { error: "Forbidden" });
     }
     if (body.salesOrderId && isFactory(user)) return json(res, 403, { error: "Forbidden" });
-    const orderNo = body.orderNo || "unassigned";
-    const orderDir = path.join(UPLOAD_DIR, orderNo.replace(/[^a-zA-Z0-9_-]/g, "_"));
-    await mkdir(orderDir, { recursive: true });
-    let storedPath = "";
-    if (body.contentBase64 && body.fileName) {
-      storedPath = path.join(orderDir, body.fileName.replace(/[^\w.\- ]/g, "_"));
-      await writeFile(storedPath, decodeBase64Payload(body.contentBase64));
-    }
-    const file = {
-      id: id("file"),
+    const file = await createOrderFileRecord(db, user, {
       salesOrderId: body.salesOrderId || "",
       purchaseOrderId: body.purchaseOrderId || "",
       fileType: body.fileType || "Other Attachment",
       fileName: body.fileName || "manual-note.txt",
       contentType: body.contentType || "application/octet-stream",
       contentBase64: body.contentBase64 || "",
-      path: storedPath,
-      uploadedBy: user.id,
-      uploadedByName: user.name,
-      createdAt: now()
-    };
-    db.order_files.push(file);
-    const { contentBase64, ...fileAudit } = file;
-    audit(db, user, "order_file", file.id, "create", null, fileAudit);
+      orderNo: body.orderNo || "unassigned"
+    });
     const relatedPo = file.purchaseOrderId ? db.purchase_orders.find((item) => item.id === file.purchaseOrderId) : null;
     const relatedSo = file.salesOrderId
       ? db.sales_orders.find((item) => item.id === file.salesOrderId)
