@@ -254,8 +254,8 @@ function renderLogin() {
     <main class="login">
       <form class="login-card" id="loginForm">
         <img class="login-logo" src="/assets/wder-logo.jpg" alt="WDER Fitness Equipment">
-        <h1>工厂订单安排与跟单管理系统</h1>
-        <p>贸易公司后台第一版：订单、采购、生产、质检、付款、利润与导出。</p>
+        <h1>跟单管理系统</h1>
+        <p>订单、采购、生产、质检、付款、利润与导出。</p>
         <div class="toolbar" style="justify-content:flex-start;margin-bottom:14px">
           <button class="btn small primary" type="button" id="showLogin">登录</button>
           <button class="btn small" type="button" id="showRegister">注册</button>
@@ -372,7 +372,7 @@ function shell(content) {
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-logo-box"><img src="/assets/wder-logo.jpg" alt="WDER Fitness Equipment"></div>
-          <div><strong>贸易跟单系统</strong><span>订单与工厂生产管理</span></div>
+          <div><strong>跟单管理系统</strong><span>订单与工厂生产管理</span></div>
         </div>
         <div class="nav-section">${isFactory ? "工厂端" : "管理后台"}</div>
         ${nav.map(([href, label]) => navLinkHtml(href, label)).join("")}
