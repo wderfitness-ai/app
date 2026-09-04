@@ -892,6 +892,23 @@ tr:hover td { background: var(--hover); }
   gap: 10px;
 }
 
+.dashboard-scroll {
+  overflow: hidden;
+  scroll-behavior: smooth;
+}
+
+.dashboard-table-scroll {
+  max-height: 220px;
+}
+
+.dashboard-table-scroll .table-wrap {
+  overflow: visible;
+}
+
+.dashboard-reminder-scroll {
+  max-height: 232px;
+}
+
 .timeline-item {
   border-left: 3px solid var(--brand);
   padding: 2px 0 2px 12px;
@@ -899,6 +916,29 @@ tr:hover td { background: var(--hover); }
 
 .timeline-item strong { display: block; }
 .timeline-item span { color: var(--muted); font-size: 12px; }
+
+.reminder-item {
+  min-height: 46px;
+  border-radius: 6px;
+  padding: 6px 8px 6px 12px;
+  background: var(--panel);
+}
+
+.reminder-item.severity-critical,
+.reminder-item.severity-high {
+  border-left-color: var(--red);
+  background: var(--tag-red-bg);
+}
+
+.reminder-item.severity-medium {
+  border-left-color: var(--yellow);
+  background: var(--tag-yellow-bg);
+}
+
+.reminder-item.severity-low {
+  border-left-color: var(--blue);
+  background: var(--tag-blue-bg);
+}
 
 .muted { color: var(--muted); }
 .right { text-align: right; }

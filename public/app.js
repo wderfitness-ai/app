@@ -9,7 +9,8 @@ const state = {
   roles: [],
   factories: [],
   notifications: { items: [], unread: 0 },
-  cache: {}
+  cache: {},
+  dashboardScrollTimers: []
 };
 
 const navAdmin = [
@@ -572,22 +573,44 @@ async function renderDashboard() {
   const recentTable = factoryMode
     ? simpleTable(data.recentOrders, ["poNo", "productionStatus", "qcStatus", "factoryDeliveryDate", "purchaseTotalCny"], ["采购单号", "生产状态", "质检", "工厂交期", "采购金额（CNY）"], (row, key) => key === "purchaseTotalCny" ? moneyCny(row[key]) : displayValue(row[key]))
     : simpleTable(data.recentOrders, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate"], ["订单号", "客户", "状态", "付款", "预计交期"]);
+  const reminderHtml = data.reminders.map((r) => `<div class="timeline-item reminder-item ${reminderSeverityClass(r.severity)}"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`;
   $("#dashboard").innerHTML = `
     <section class="grid cards">${cards.map(([label, value]) => `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("")}</section>
     <section class="split">
       <div class="panel">
         <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的订单"}</h2>
-        ${recentTable}
+        <div class="dashboard-scroll dashboard-table-scroll" data-auto-scroll>${recentTable}</div>
       </div>
       <div class="panel">
         <h2>延期与待办提醒</h2>
-        <div class="timeline">${data.reminders.map((r) => `<div class="timeline-item"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`}</div>
+        <div class="dashboard-scroll dashboard-reminder-scroll" data-auto-scroll><div class="timeline">${reminderHtml}</div></div>
       </div>
     </section>
     <section class="panel" style="margin-top:14px">
       <h2>最近工厂更新记录</h2>
       ${simpleTable(data.recentFactoryUpdates, ["actorName", "oldStatus", "newStatus", "note", "createdAt"], ["操作人", "原状态", "新状态", "备注", "时间"])}
     </section>`;
+  bindDashboardAutoScroll();
+}
+
+function bindDashboardAutoScroll() {
+  state.dashboardScrollTimers.forEach((timer) => clearInterval(timer));
+  state.dashboardScrollTimers = [];
+  $$("[data-auto-scroll]").forEach((container) => {
+    if (container.scrollHeight <= container.clientHeight + 2) return;
+    let paused = false;
+    container.addEventListener("mouseenter", () => { paused = true; });
+    container.addEventListener("mouseleave", () => { paused = false; });
+    const timer = setInterval(() => {
+      if (paused) return;
+      if (container.scrollTop >= container.scrollHeight - container.clientHeight - 1) {
+        container.scrollTop = 0;
+        return;
+      }
+      container.scrollTop += 1;
+    }, 70);
+    state.dashboardScrollTimers.push(timer);
+  });
 }
 
 function pageTitle(title, desc, action = "") {
@@ -1992,6 +2015,15 @@ function deliveryLabel(term) {
 
 function severityLabel(level) {
   return { low: "低", medium: "中", high: "高", critical: "紧急" }[level] || level || "";
+}
+
+function reminderSeverityClass(level) {
+  return {
+    critical: "severity-critical",
+    high: "severity-high",
+    medium: "severity-medium",
+    low: "severity-low"
+  }[level] || "severity-medium";
 }
 
 function formatChinaDateTime(value) {
