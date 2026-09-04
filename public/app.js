@@ -649,10 +649,16 @@ async function renderDashboard() {
       </div>
     </section>
     <section class="panel" style="margin-top:14px">
-      <h2>最近工厂更新记录</h2>
-      ${simpleTable(data.recentFactoryUpdates, ["actorName", "oldStatus", "newStatus", "note", "createdAt"], ["操作人", "原状态", "新状态", "备注", "时间"])}
+      <div class="panel-title-row">
+        <h2>最近工厂更新记录</h2>
+        <button class="btn small" data-go="${factoryMode ? "/factory/notifications" : "/admin/notifications"}">更多</button>
+      </div>
+      <div class="dashboard-scroll dashboard-factory-updates-scroll" data-auto-scroll>
+        ${simpleTable(data.recentFactoryUpdates, ["actorName", "oldStatus", "newStatus", "note", "createdAt"], ["操作人", "原状态", "新状态", "备注", "时间"], (row, key) => key === "createdAt" ? formatChinaDateTime(row[key]) : displayValue(row[key]))}
+      </div>
     </section>`;
   bindDashboardAutoScroll();
+  bindGoButtons();
 }
 
 function bindDashboardAutoScroll() {

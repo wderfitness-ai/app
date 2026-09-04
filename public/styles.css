@@ -522,6 +522,18 @@ a {
   font-size: 16px;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panel-title-row h2 {
+  margin: 0;
+}
+
 .split {
   display: grid;
   grid-template-columns: 1.35fr 0.9fr;
@@ -955,6 +967,15 @@ tr:hover td { background: var(--hover); }
 
 .dashboard-reminder-scroll {
   max-height: 232px;
+}
+
+.dashboard-factory-updates-scroll {
+  max-height: 408px;
+  overflow-y: auto;
+}
+
+.dashboard-factory-updates-scroll .table-wrap {
+  overflow: visible;
 }
 
 .timeline-item {

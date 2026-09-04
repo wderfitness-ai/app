@@ -2221,7 +2221,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         },
         reminders: createReminderRecords(db).filter((r) => visiblePo.some((po) => po.id === r.purchaseOrderId)).slice(0, 12),
         recentOrders: visiblePo.slice(-8).reverse().map((po) => visiblePurchaseOrder(db, po, user)),
-        recentFactoryUpdates: db.order_timeline.filter((tl) => tl.orderType === "purchase_order" && visiblePo.some((po) => po.id === tl.orderId)).slice(-8).reverse()
+        recentFactoryUpdates: db.order_timeline.filter((tl) => tl.orderType === "purchase_order" && visiblePo.some((po) => po.id === tl.orderId)).slice(-80).reverse()
       });
     }
     const monthSales = visibleSales.filter((so) => so.orderDate.startsWith(month));
@@ -2248,7 +2248,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       },
       reminders: createReminderRecords(db).slice(0, 12),
       recentOrders: visibleSales.slice(-8).reverse().map((o) => visibleSalesOrder(db, o, user)),
-      recentFactoryUpdates: db.order_timeline.filter((tl) => tl.orderType === "purchase_order").slice(-8).reverse()
+      recentFactoryUpdates: db.order_timeline.filter((tl) => tl.orderType === "purchase_order").slice(-80).reverse()
     });
   }
 
