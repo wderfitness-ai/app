@@ -2399,6 +2399,43 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     });
   }
 
+  if (resource === "data-diagnostics" && method === "GET") {
+    if (!requireRole(user, res, [ROLE.ADMIN])) return;
+    const summarize = (items, numberKey) => (items || []).map((item) => ({
+      id: item.id,
+      number: item[numberKey] || "",
+      deletedAt: item.deletedAt || "",
+      archivedAt: item.archivedAt || "",
+      status: item.status || item.productionStatus || "",
+      createdAt: item.createdAt || "",
+      updatedAt: item.updatedAt || ""
+    }));
+    const sales = summarize(db.sales_orders, "orderNo");
+    const purchase = summarize(db.purchase_orders, "poNo");
+    return json(res, 200, {
+      counts: {
+        users: db.users?.length || 0,
+        customers: db.customers?.length || 0,
+        factories: db.factories?.length || 0,
+        products: db.products?.length || 0,
+        salesOrders: db.sales_orders?.length || 0,
+        activeSalesOrders: sales.filter((item) => !item.deletedAt && !item.archivedAt).length,
+        purchaseOrders: db.purchase_orders?.length || 0,
+        activePurchaseOrders: purchase.filter((item) => !item.deletedAt && !item.archivedAt).length,
+        salesOrderItems: db.sales_order_items?.length || 0,
+        purchaseOrderItems: db.purchase_order_items?.length || 0,
+        orderFiles: db.order_files?.length || 0,
+        activeOrderFiles: (db.order_files || []).filter((item) => !item.deletedAt && !item.archivedAt).length,
+        qcReports: db.qc_reports?.length || 0,
+        notifications: db.notifications?.length || 0,
+        auditLogs: db.audit_logs?.length || 0,
+        chatMessages: db.chat_messages?.length || 0
+      },
+      sales,
+      purchase
+    });
+  }
+
   if (resource === "nav-summary" && method === "GET") {
     const notifications = visibleNotifications(db, user);
     const unreadNotifications = notifications.filter((item) => item.unread);
