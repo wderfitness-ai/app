@@ -982,7 +982,13 @@ tr:hover td { background: var(--hover); }
 }
 
 .dashboard-reminder-scroll {
-  max-height: 232px;
+  max-height: 360px;
+  overflow-y: hidden;
+}
+
+.dashboard-reminder-scroll.expanded {
+  max-height: none;
+  overflow-y: visible;
 }
 
 .dashboard-factory-updates-scroll {

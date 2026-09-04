@@ -641,6 +641,7 @@ async function renderDashboard() {
     ? simpleTable(data.recentOrders, ["poNo", "productionStatus", "qcStatus", "factoryDeliveryDate", "purchaseTotalCny"], ["采购单号", "生产状态", "质检", "工厂交期", "采购金额（CNY）"], (row, key) => key === "purchaseTotalCny" ? moneyCny(row[key]) : displayValue(row[key]))
     : simpleTable(data.recentOrders, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate"], ["订单号", "客户", "状态", "付款", "预计交期"]);
   const reminderHtml = data.reminders.map((r) => `<div class="timeline-item reminder-item ${reminderSeverityClass(r.severity)}"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`;
+  const hasManyReminders = data.reminders.length > 4;
   $("#dashboard").innerHTML = `
     <section class="grid cards">${cards.map(([label, value]) => `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("")}</section>
     <section class="split">
@@ -649,8 +650,13 @@ async function renderDashboard() {
         <div class="dashboard-scroll dashboard-table-scroll" data-auto-scroll>${recentTable}</div>
       </div>
       <div class="panel">
-        <h2>延期与待办提醒</h2>
-        <div class="dashboard-scroll dashboard-reminder-scroll" data-auto-scroll><div class="timeline">${reminderHtml}</div></div>
+        <div class="panel-title-row">
+          <h2>延期与待办提醒</h2>
+          ${hasManyReminders ? `<button class="btn small" id="toggleDashboardReminders" type="button">更多</button>` : ""}
+        </div>
+        <div class="dashboard-scroll dashboard-reminder-scroll" data-auto-scroll data-seamless-scroll>
+          <div class="timeline">${reminderHtml}</div>
+        </div>
       </div>
     </section>
     <section class="panel" style="margin-top:14px">
@@ -664,6 +670,7 @@ async function renderDashboard() {
     </section>`;
   bindDashboardAutoScroll();
   bindGoButtons();
+  bindDashboardReminderToggle();
 }
 
 function bindDashboardAutoScroll() {
@@ -671,11 +678,23 @@ function bindDashboardAutoScroll() {
   state.dashboardScrollTimers = [];
   $$("[data-auto-scroll]").forEach((container) => {
     if (container.scrollHeight <= container.clientHeight + 2) return;
+    let loopHeight = 0;
+    if (container.dataset.seamlessScroll !== undefined) {
+      const content = container.firstElementChild;
+      if (content && content.children.length > 1) {
+        content.dataset.originalHtml = content.innerHTML;
+        content.insertAdjacentHTML("beforeend", content.dataset.originalHtml);
+        loopHeight = Math.ceil(content.scrollHeight / 2);
+      }
+    }
     let paused = false;
     container.addEventListener("mouseenter", () => { paused = true; });
     container.addEventListener("mouseleave", () => { paused = false; });
     const timer = setInterval(() => {
-      if (paused) return;
+      if (paused || container.classList.contains("expanded")) return;
+      if (loopHeight && container.scrollTop >= loopHeight) {
+        container.scrollTop = 0;
+      }
       if (container.scrollTop >= container.scrollHeight - container.clientHeight - 1) {
         container.scrollTop = 0;
         return;
@@ -683,6 +702,25 @@ function bindDashboardAutoScroll() {
       container.scrollTop += 1;
     }, 70);
     state.dashboardScrollTimers.push(timer);
+  });
+}
+
+function bindDashboardReminderToggle() {
+  $("#toggleDashboardReminders")?.addEventListener("click", (event) => {
+    const container = $(".dashboard-reminder-scroll");
+    const content = container?.firstElementChild;
+    if (!container || !content) return;
+    container.classList.toggle("expanded");
+    if (container.classList.contains("expanded")) {
+      content.innerHTML = content.dataset.originalHtml || content.innerHTML;
+      container.scrollTop = 0;
+      event.currentTarget.textContent = "收起";
+      return;
+    }
+    event.currentTarget.textContent = "更多";
+    if (content.dataset.originalHtml) {
+      content.innerHTML = content.dataset.originalHtml + content.dataset.originalHtml;
+    }
   });
 }
 
