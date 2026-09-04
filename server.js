@@ -47,7 +47,7 @@ const BOOTSTRAP_ADMIN = {
   id: "user-wderfitness-admin",
   name: "WdeFitness",
   email: process.env.BOOTSTRAP_ADMIN_EMAIL || "wderfitness@gmail.com",
-  password: process.env.BOOTSTRAP_ADMIN_PASSWORD || "",
+  password: process.env.BOOTSTRAP_ADMIN_PASSWORD || "sha256:4ec1a0ca824b4ae89167718b7c3dfa7c1db24460b87ff36e4a86c4b46970082d",
   role: ROLE.ADMIN,
   approvalStatus: "approved"
 };
@@ -324,6 +324,11 @@ function findLoginUser(users, identity) {
 }
 
 function matchesLoginPassword(user, password) {
+  if (String(user.password || "").startsWith("sha256:")) {
+    const expected = String(user.password).slice("sha256:".length);
+    const actual = crypto.createHash("sha256").update(String(password || "")).digest("hex");
+    return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+  }
   return user.password === password;
 }
 
