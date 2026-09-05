@@ -1257,6 +1257,12 @@ async function renderNewSalesOrder() {
   const [customers, products] = await Promise.all([api("/api/customers?pageSize=50"), api("/api/products?pageSize=50")]);
   const productOptions = products.items.map((p) => `<option value="${p.id}" data-name="${escapeAttr(p.name)}" data-model="${escapeAttr(p.model)}" data-price="${escapeAttr(p.defaultSalesPrice)}" data-purchase="${escapeAttr(p.defaultPurchasePrice)}">${escapeHtml(p.name)} / ${escapeHtml(p.model)}</option>`).join("");
   const defaultSalesPrice = products.items[0]?.defaultSalesPrice || 1;
+  const productCellHtml = () => `
+    <div class="custom-product-cell">
+      <select class="select" name="productId">${productOptions}</select>
+      <input class="input custom-product-input hidden" name="customProductName" placeholder="输入自定义产品名称（中文 / English）">
+      <button class="btn small" type="button" data-toggle-custom-product>自定义名称</button>
+    </div>`;
   shell(pageTitle("新建客户订单", "创建客户订单后，可在详情页一键生成工厂采购订单。") + `
     <form class="panel" id="newOrderForm">
       <div class="form-grid">
@@ -1274,7 +1280,7 @@ async function renderNewSalesOrder() {
       <h2>产品明细</h2>
       <div class="table-wrap"><table><thead><tr><th>产品名称（中文 / English）</th><th>数量</th><th>销售单价</th><th>标志要求</th><th>颜色</th><th>包装</th><th>操作</th></tr></thead><tbody id="salesOrderItemsBody">
         <tr data-sales-item-row>
-          <td><select class="select" name="productId">${productOptions}</select></td>
+          <td>${productCellHtml()}</td>
           <td><input class="input" name="quantity" type="number" value="500"></td>
           <td><input class="input" name="salesUnitPrice" type="number" step="0.01" value="${defaultSalesPrice}" placeholder="USD"></td>
           <td><input class="input" name="logoRequirement" value="按客户文件"></td>
@@ -1293,7 +1299,7 @@ async function renderNewSalesOrder() {
     const tr = document.createElement("tr");
     tr.dataset.salesItemRow = "1";
     tr.innerHTML = `
-      <td><select class="select" name="productId">${productOptions}</select></td>
+      <td>${productCellHtml()}</td>
       <td><input class="input" name="quantity" type="number" value="1"></td>
       <td><input class="input" name="salesUnitPrice" type="number" step="0.01" value="${defaultSalesPrice}" placeholder="USD"></td>
       <td><input class="input" name="logoRequirement" value="按客户文件"></td>
@@ -1305,9 +1311,22 @@ async function renderNewSalesOrder() {
   $("#addSalesOrderItem").addEventListener("click", () => itemBody.appendChild(createSalesItemRow()));
   itemBody.addEventListener("click", (event) => {
     const removeButton = event.target.closest("[data-remove-sales-item]");
-    if (!removeButton) return;
-    if ($$("[data-sales-item-row]", itemBody).length <= 1) return alert("至少保留一条产品明细");
-    removeButton.closest("[data-sales-item-row]")?.remove();
+    const customButton = event.target.closest("[data-toggle-custom-product]");
+    if (removeButton) {
+      if ($$("[data-sales-item-row]", itemBody).length <= 1) return alert("至少保留一条产品明细");
+      removeButton.closest("[data-sales-item-row]")?.remove();
+      return;
+    }
+    if (customButton) {
+      const cell = customButton.closest(".custom-product-cell");
+      const select = cell.querySelector("select[name=productId]");
+      const input = cell.querySelector("[name=customProductName]");
+      const useCustom = input.classList.contains("hidden");
+      input.classList.toggle("hidden", !useCustom);
+      select.classList.toggle("hidden", useCustom);
+      customButton.textContent = useCustom ? "选择产品库" : "自定义名称";
+      if (useCustom) input.focus();
+    }
   });
   itemBody.addEventListener("change", (event) => {
     const select = event.target.closest("select[name=productId]");
@@ -1323,22 +1342,25 @@ async function renderNewSalesOrder() {
     const body = Object.fromEntries(fd);
     body.items = $$("[data-sales-item-row]", itemBody).map((row) => {
       const productSelect = row.querySelector("[name=productId]");
+      const customInput = row.querySelector("[name=customProductName]");
+      const useCustom = customInput && !customInput.classList.contains("hidden");
+      const customName = useCustom ? String(customInput.value || "").trim() : "";
       const opt = productSelect.selectedOptions[0];
       const quantity = Number(row.querySelector("[name=quantity]")?.value || 0);
       const price = Number(row.querySelector("[name=salesUnitPrice]")?.value || 0);
       return {
-        productId: productSelect.value,
-        productName: opt.dataset.name,
-        model: opt.dataset.model,
+        productId: customName ? "" : productSelect.value,
+        productName: customName || opt?.dataset.name || "",
+        model: customName ? "" : opt?.dataset.model || "",
         quantity,
         salesUnitPrice: price,
         salesTotal: quantity * price,
-        defaultPurchasePrice: Number(opt.dataset.purchase),
+        defaultPurchasePrice: customName ? 0 : Number(opt?.dataset.purchase || 0),
         logoRequirement: row.querySelector("[name=logoRequirement]")?.value || "",
         colorRequirement: row.querySelector("[name=colorRequirement]")?.value || "",
         packagingRequirement: row.querySelector("[name=packagingRequirement]")?.value || ""
       };
-    }).filter((item) => item.productId && item.quantity > 0);
+    }).filter((item) => item.productName && item.quantity > 0);
     if (!body.items.length) return alert("请至少填写一条有效的产品明细");
     const order = await api("/api/sales-orders", { method: "POST", body: JSON.stringify(body) });
     go(`/admin/orders/${order.id}`);

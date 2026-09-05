@@ -962,6 +962,24 @@ tr:hover td { background: var(--hover); }
   align-items: center;
 }
 
+.custom-product-cell {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 360px;
+}
+
+.custom-product-cell .select,
+.custom-product-cell .input {
+  width: 100%;
+  min-width: 0;
+}
+
+.custom-product-cell .btn {
+  white-space: nowrap;
+}
+
 .form-grid label {
   display: grid;
   gap: 6px;
@@ -1447,6 +1465,11 @@ tr:hover td { background: var(--hover); }
   }
   table {
     min-width: 720px;
+  }
+
+  .custom-product-cell {
+    grid-template-columns: 1fr;
+    min-width: 280px;
   }
 
   .chat-layout {
