@@ -954,6 +954,14 @@ tr:hover td { background: var(--hover); }
   gap: 12px;
 }
 
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+}
+
 .form-grid label {
   display: grid;
   gap: 6px;
