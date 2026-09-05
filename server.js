@@ -1304,7 +1304,10 @@ const PRODUCT_ZH = {
   "Standard 2 Tier Dumbbell Rack (10 pair)": "标准双层哑铃架（10副）",
   "Chrome Dumbbell": "电镀哑铃",
   "Cast Iron Kettlebell": "铸铁壶铃",
-  "Fixed Barbell Chrome EZ": "电镀固定EZ弯杆"
+  "Fixed Barbell Chrome EZ": "电镀固定EZ弯杆",
+  "Rubber Flooring": "橡胶地垫",
+  "Starry Sky Composite Rubber Floor": "星空复合橡胶地垫",
+  "Starry Sky Composite Rubber Floor - Blue Dots": "星空复合橡胶地垫-蓝点"
 };
 
 const PRODUCT_NAME_BY_MODEL = {
@@ -1325,7 +1328,8 @@ const PRODUCT_NAME_BY_MODEL = {
   "KB-037": ["铸铁壶铃", "Cast Iron Kettlebell"],
   "CB-003": ["电镀固定EZ弯杆", "Fixed Barbell Chrome EZ"],
   "DB-008": ["圆头聚氨酯哑铃", "Round Urethane Dumbbell (5-50 lb)"],
-  "DB-004": ["电镀金色哑铃", "Chrome Golden Dumbbell (5-150 lb)"]
+  "DB-004": ["电镀金色哑铃", "Chrome Golden Dumbbell (5-150 lb)"],
+  "RUBF30": ["星空复合橡胶地垫-蓝点", "Starry Sky Composite Rubber Floor - Blue Dots"]
 };
 
 function bilingualProductName(name, model = "") {
@@ -1339,6 +1343,10 @@ function bilingualProductName(name, model = "") {
 
 function moneyNumber(value) {
   return Number(String(value || "0").replace(/[$,]/g, ""));
+}
+
+function normalizeAreaUnit(value = "") {
+  return String(value || "").replace(/m²|㎡|m2|sqm/gi, "m²");
 }
 
 function formatWeightValue(value) {
@@ -1431,9 +1439,143 @@ function extractImportedCustomerValues(lines) {
   return fallbackBlock.map(cleanImportedCustomerLine).filter(Boolean);
 }
 
+function commercialInvoiceCustomer(lines) {
+  const supplierCustomerStart = lines.findIndex((line) => line === "Supplier Customer");
+  const customerStart = lines.findIndex((line) => line === "Customer");
+  if (customerStart >= 0) {
+    const company = lines[customerStart + 1] || "Imported Customer";
+    const contactLine = lines.find((line, index) => index > customerStart && /\bAttn\s*:/i.test(line)) || "";
+    const emailLine = lines.find((line, index) => index > customerStart && /\bEmail\s*:/i.test(line)) || "";
+    const phoneLine = lines.find((line, index) => index > customerStart && /\bTel\s*:/i.test(line)) || "";
+    return {
+      name: company,
+      company,
+      country: "",
+      contact: contactLine.match(/Attn\s*:\s*(.+)$/i)?.[1]?.trim() || company,
+      email: emailLine.match(/Email\s*:\s*([^\s]+)/i)?.[1] || "",
+      whatsapp: "",
+      phone: phoneLine.match(/Tel\s*:\s*(.+)$/i)?.[1]?.trim() || "",
+      address: lines.find((line) => /Final consignee and delivery address/i.test(line)) || "",
+      source: "Other",
+      level: "B",
+      remark: "Commercial Invoice PDF 导入客户"
+    };
+  }
+  const firstCustomerLine = supplierCustomerStart >= 0 ? lines[supplierCustomerStart + 1] || "" : "";
+  const company = firstCustomerLine
+    .replace(/^QINGDAO\s+WDER\s+FITNESS\s+CO\.,?\s+LTD\.?\s*/i, "")
+    .trim()
+    || "Imported Customer";
+  const contactLine = lines.find((line) => /\bAttn\s*:/i.test(line)) || "";
+  const contact = contactLine.match(/Attn\s*:\s*(.+)$/i)?.[1]?.trim() || company;
+  const email = (lines.find((line) => /\bEmail\s*:/i.test(line)) || "").match(/Email\s*:\s*([^\s]+)/i)?.[1] || "";
+  const phone = (lines.find((line) => /\bTel\s*:/i.test(line)) || "").match(/Tel\s*:\s*(.+)$/i)?.[1]?.trim() || "";
+  const address = lines.find((line) => /Final consignee and delivery address/i.test(line)) || "";
+  return {
+    name: company,
+    company,
+    country: "",
+    contact,
+    email,
+    whatsapp: "",
+    phone,
+    address,
+    source: "Other",
+    level: "B",
+    remark: "Commercial Invoice PDF 导入客户"
+  };
+}
+
+function parseCommercialInvoiceSalesOrderPdf(textValue, lines) {
+  const invoiceNo = textValue.match(/Invoice No\.\s*:\s*([^\n]+)/i)?.[1]?.trim() || "";
+  const invoiceDate = normalizePdfDate(textValue.match(/Invoice Date\s*:\s*([0-9/-]+)/i)?.[1]);
+  const currency = textValue.match(/Currency\s*:\s*([A-Z]+)/i)?.[1] || "USD";
+  const freight = moneyNumber(textValue.match(/Freight charge[\s\S]*?\$([\d,.]+)/i)?.[1])
+    || moneyNumber(textValue.match(/Product amount\s+Freight\s+Grand total[\s\S]*?\$[\d,.]+\s+\$([\d,.]+)/i)?.[1]);
+  const grandTotal = moneyNumber(textValue.match(/Grand Total\s+\$([\d,.]+)/i)?.[1])
+    || moneyNumber(textValue.match(/Total order amount\s*:\s*\$([\d,.]+)/i)?.[1]);
+  const productAmount = moneyNumber(textValue.match(/Total Product Amount\s+\$([\d,.]+)/i)?.[1])
+    || Number((grandTotal - freight).toFixed(2));
+  const deliveryLine = lines.find((line) => /^Delivery\s*:/i.test(line) || /\bDelivery:\s*/i.test(line)) || "";
+  const deliveryAddress = deliveryLine.match(/Delivery\s*:\s*(.+)$/i)?.[1]?.trim()
+    || lines.find((line) => /Final consignee and delivery address/i.test(line)) || "";
+
+  const items = [];
+  const detailStart = lines.findIndex((line) => line === "Item Details");
+  const freightStart = lines.findIndex((line, index) => index > detailStart && line === "Freight & Order Total");
+  const detailLines = detailStart >= 0 ? lines.slice(detailStart + 1, freightStart > detailStart ? freightStart : undefined) : [];
+  const detailText = detailLines.join(" ").replace(/\s+/g, " ");
+  const sku = detailText.match(/\b([A-Z]{3,}\d{2,})\b/)?.[1]
+    || textValue.match(/SKU\s*:\s*([A-Z0-9-]+)/i)?.[1]?.trim() || "";
+  const totalsLine = lines.find((line) => sku && line.includes(sku) && /\$[\d,.]+/.test(line) && !/^Product SKU/i.test(line)) || "";
+  const productName = (totalsLine
+    ? totalsLine.replace(new RegExp(`\\s*${sku.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\$[\\d,.]+.*$`, "i"), "").trim()
+    : textValue.match(/Product Reference\s+([^\n]+)/i)?.[1]?.trim())
+    || "Rubber Flooring";
+  const areaMatch = detailText.match(/([\d,.]+)\s*(m²|㎡|m2|sqm)\s*\$([\d,.]+)\/\s*(m²|㎡|m2|sqm)\s*\$([\d,.]+)/i);
+  if (areaMatch) {
+    const area = Number(areaMatch[1].replace(/,/g, ""));
+    const unitPrice = moneyNumber(areaMatch[3]);
+    const amount = moneyNumber(areaMatch[5]);
+    const specParts = [];
+    const thickness = detailText.match(/(\d+(?:\.\d+)?)\s*mm\b/i)?.[0];
+    const size = detailText.match(/(\d+(?:,\d{3})?|\d+)\s*x\s*(\d+(?:,\d{3})?|\d+)\s*mm/i)?.[0];
+    if (thickness) specParts.push(thickness);
+    if (size) specParts.push(size.replace(/\s+/g, " "));
+    if (/interlocking/i.test(detailText)) specParts.push("Interlocking");
+    items.push({
+      productName: bilingualProductName(productName, sku),
+      model: sku,
+      specification: specParts.join("; ") || normalizeAreaUnit("Rubber flooring"),
+      qtyLabel: `${formatWeightValue(area)} m²`,
+      quantity: area,
+      freightWeight: `${formatWeightValue(area)} m²`,
+      salesUnitPrice: unitPrice,
+      salesTotal: amount,
+      logoRequirement: "按客户确认要求",
+      colorRequirement: "按客户确认要求",
+      packagingRequirement: "按客户确认要求"
+    });
+  }
+
+  if (!items.length) throw new Error("Commercial Invoice 中未识别到橡胶地垫产品明细");
+
+  const customer = commercialInvoiceCustomer(lines);
+  return {
+    quoteRef: invoiceNo,
+    quoteDate: invoiceDate,
+    deliveryTerm: "FOB",
+    currency,
+    leadTimeDays: 30,
+    productAmount,
+    freight,
+    grandTotal,
+    customer,
+    order: {
+      orderNo: "",
+      orderDate: invoiceDate,
+      deliveryTerm: "FOB",
+      destinationCountry: customer.country,
+      destinationAddress: deliveryAddress || customer.address,
+      freight,
+      otherFees: 0,
+      depositAmount: 0,
+      balanceAmount: grandTotal || productAmount + freight,
+      paymentStatus: "Deposit Pending",
+      status: "Customer Confirmed",
+      expectedDeliveryDate: addDays(invoiceDate, 30),
+      remark: `Commercial Invoice 导入。发票号：${invoiceNo || "-"}；币种：${currency}；产品金额：${productAmount}；运费：${freight}；总金额：${grandTotal || productAmount + freight}`
+    },
+    items
+  };
+}
+
 function parseImportedSalesOrderPdf(textContent) {
   const textValue = String(textContent || "").replace(/\r/g, "");
   const lines = textValue.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (/COMMERCIAL INVOICE/i.test(textValue) && /m²|㎡|m2|sqm/i.test(textValue)) {
+    return parseCommercialInvoiceSalesOrderPdf(textValue, lines);
+  }
   const rawQuoteRef = textValue.match(/(?:Quote|Order) Reference:\s*((?:ORD|SO|PO|Q)-\d{8}-\d{1,3})/i)?.[1] || "";
   const quoteRef = normalizeImportedOrderNo(rawQuoteRef);
   const quoteDate = normalizePdfDate(textValue.match(/Quote Date:\s*([0-9/-]+)/i)?.[1]);
@@ -1597,6 +1739,16 @@ function importedProductFallbackModel(name) {
   return `PDF-${digest}`;
 }
 
+function importedProductUnit(raw) {
+  const unitText = `${raw.unit || ""} ${raw.qtyLabel || ""} ${raw.freightWeight || ""} ${raw.specification || raw.spec || ""}`;
+  if (/m²|㎡|m2|sqm/i.test(unitText)) return "sqm";
+  if (/\bkg\b/i.test(unitText)) return "kg";
+  if (/\blb|lbs\b/i.test(unitText)) return "lb";
+  if (/pair|pairs/i.test(unitText)) return "pair";
+  if (/set|sets/i.test(unitText)) return "set";
+  return "piece";
+}
+
 function ensureImportedProduct(db, raw) {
   const model = String(raw.model || "").trim();
   const name = bilingualProductName(raw.productName || raw.name || "", model);
@@ -1615,7 +1767,7 @@ function ensureImportedProduct(db, raw) {
     image: "",
     defaultSalesPrice: raw.salesUnitPrice,
     defaultPurchasePrice: 0,
-    unit: "piece",
+    unit: importedProductUnit(raw),
     weight: "",
     packageSize: "",
     remark: "客户订单 PDF 自动导入",
