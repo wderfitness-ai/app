@@ -650,7 +650,7 @@ async function renderDashboard() {
       ];
   const recentTable = factoryMode
     ? simpleTable(data.recentOrders, ["poNo", "productionStatus", "qcStatus", "factoryDeliveryDate", "purchaseTotalCny"], ["采购单号", "生产状态", "质检", "工厂交期", "采购金额（CNY）"], (row, key) => key === "purchaseTotalCny" ? moneyCny(row[key]) : displayValue(row[key]))
-    : simpleTable(data.recentOrders, ["orderNo", "customerCompany", "statusZh", "paymentStatus", "expectedDeliveryDate"], ["订单号", "客户", "状态", "付款", "预计交期"]);
+    : simpleTable(data.recentOrders, ["poNo", "factoryName", "productionStatus", "factoryPaymentStatus", "factoryDeliveryDate"], ["采购单号", "工厂", "生产状态", "工厂付款", "工厂交期"]);
   const reminderHtml = data.reminders.map((r) => `<div class="timeline-item reminder-item ${reminderSeverityClass(r.severity)}"><strong>${r.title}</strong><span>${severityLabel(r.severity)} · ${formatChinaDate(r.createdAt)}</span></div>`).join("") || `<p class="muted">暂无提醒</p>`;
   const hasManyReminders = data.reminders.length > 4;
   $("#dashboard").innerHTML = `
@@ -658,7 +658,7 @@ async function renderDashboard() {
     <section class="split">
       <div class="panel">
         <div class="panel-title-row">
-          <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的订单"}</h2>
+          <h2>${factoryMode ? "最近需要处理的采购单" : "最近需要处理的工厂采购单"}</h2>
           <button class="btn small" id="toggleDashboardRecentOrders" type="button">更多</button>
         </div>
         <div class="dashboard-scroll dashboard-table-scroll" data-auto-scroll data-seamless-scroll>${recentTable}</div>

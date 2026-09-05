@@ -2476,7 +2476,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         monthProfit: canViewFinance(user) ? finance.profit : null
       },
       reminders: createReminderRecords(db).slice(0, 80),
-      recentOrders: visibleSales.slice(-80).reverse().map((o) => visibleSalesOrder(db, o, user)),
+      recentOrders: visiblePo.slice(-80).reverse().map((po) => visiblePurchaseOrder(db, po, user)),
       recentFactoryUpdates: db.order_timeline.filter((tl) => tl.orderType === "purchase_order").slice(-80).reverse()
     });
   }
