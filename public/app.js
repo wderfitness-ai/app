@@ -876,7 +876,7 @@ async function loadPurchaseOrders() {
 async function renderChatsPage(selectedPurchaseOrderId = "") {
   const factoryMode = state.user.role === "Factory";
   shell(pageTitle("订单沟通", factoryMode ? "按采购单与贸易公司沟通交期、价格、生产、质检和发货问题。" : "按采购单与对应工厂沟通交期、价格、生产、质检和发货问题。") + `
-    <section class="panel">
+    <section class="panel chat-page-panel">
       <div class="chat-layout">
         <div class="chat-thread-list" id="chatThreadList">加载中...</div>
         <div class="chat-panel" id="chatPanel">请选择一个采购单开始沟通。</div>

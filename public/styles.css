@@ -1050,19 +1050,25 @@ tr:hover td { background: var(--hover); }
 .factory-shell .sidebar { background: var(--factory-sidebar-bg); }
 .factory-shell .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
+.chat-page-panel {
+  min-height: calc(100vh - 174px);
+  display: grid;
+}
+
 .chat-layout {
   display: grid;
   grid-template-columns: minmax(260px, 0.35fr) minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
   gap: 14px;
   min-height: 0;
+  height: 100%;
 }
 
 .chat-thread-list {
   display: grid;
   align-content: start;
   gap: 8px;
-  max-height: 70vh;
+  max-height: calc(100vh - 218px);
   overflow: auto;
   min-width: 0;
 }
@@ -1103,8 +1109,8 @@ tr:hover td { background: var(--hover); }
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto auto auto;
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-content: stretch;
   gap: 12px;
   min-height: 0;
   min-width: 0;
@@ -1136,8 +1142,8 @@ tr:hover td { background: var(--hover); }
   display: grid;
   align-content: start;
   gap: 10px;
-  max-height: min(42vh, 360px);
-  min-height: 120px;
+  max-height: none;
+  min-height: 0;
   overflow: auto;
   padding: 4px;
 }
@@ -1438,6 +1444,7 @@ tr:hover td { background: var(--hover); }
   .chat-layout {
     grid-template-columns: 1fr;
     min-height: 0;
+    height: auto;
   }
 
   .chat-thread-list {
@@ -1445,12 +1452,12 @@ tr:hover td { background: var(--hover); }
   }
 
   .chat-panel {
-    min-height: 0;
+    min-height: min(540px, 70vh);
   }
 
   .chat-messages {
-    max-height: min(46vh, 360px);
-    min-height: 100px;
+    max-height: none;
+    min-height: 0;
   }
 
   .chat-compose {
