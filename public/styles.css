@@ -1053,8 +1053,9 @@ tr:hover td { background: var(--hover); }
 .chat-layout {
   display: grid;
   grid-template-columns: minmax(260px, 0.35fr) minmax(0, 1fr);
+  align-items: start;
   gap: 14px;
-  min-height: 560px;
+  min-height: 0;
 }
 
 .chat-thread-list {
@@ -1103,6 +1104,7 @@ tr:hover td { background: var(--hover); }
 .chat-panel {
   display: grid;
   grid-template-rows: auto auto auto;
+  align-content: start;
   gap: 12px;
   min-height: 0;
   min-width: 0;
