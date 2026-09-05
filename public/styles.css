@@ -1102,9 +1102,9 @@ tr:hover td { background: var(--hover); }
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto;
   gap: 12px;
-  min-height: 560px;
+  min-height: 0;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1134,6 +1134,8 @@ tr:hover td { background: var(--hover); }
   display: grid;
   align-content: start;
   gap: 10px;
+  max-height: min(42vh, 360px);
+  min-height: 120px;
   overflow: auto;
   padding: 4px;
 }
@@ -1152,14 +1154,13 @@ tr:hover td { background: var(--hover); }
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px;
-  background: var(--panel);
+  background: transparent;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .chat-message.own .chat-bubble {
-  background: var(--tag-blue-bg);
   border-color: var(--button-hover-line);
 }
 
@@ -1438,7 +1439,12 @@ tr:hover td { background: var(--hover); }
   }
 
   .chat-panel {
-    min-height: 520px;
+    min-height: 0;
+  }
+
+  .chat-messages {
+    max-height: min(46vh, 360px);
+    min-height: 100px;
   }
 
   .chat-compose {
