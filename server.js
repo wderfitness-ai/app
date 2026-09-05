@@ -1584,13 +1584,33 @@ function ensureImportedCustomer(db, parsed) {
   return created;
 }
 
+function normalizeProductMatchValue(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function importedProductFallbackModel(name) {
+  const digest = crypto.createHash("sha1").update(String(name || "")).digest("hex").slice(0, 6).toUpperCase();
+  return `PDF-${digest}`;
+}
+
 function ensureImportedProduct(db, raw) {
-  const existing = db.products.find((product) => product.model === raw.model);
+  const model = String(raw.model || "").trim();
+  const name = bilingualProductName(raw.productName || raw.name || "", model);
+  const normalizedName = normalizeProductMatchValue(name);
+  const existing = db.products.find((product) => {
+    const existingModel = String(product.model || "").trim();
+    if (model && existingModel && existingModel.toLowerCase() === model.toLowerCase()) return true;
+    return normalizedName && normalizeProductMatchValue(product.name) === normalizedName;
+  });
   if (existing) return existing;
   const created = {
     id: id("product"),
-    name: raw.productName,
-    model: raw.model,
+    name,
+    model: model || importedProductFallbackModel(name),
     category: "PDF导入",
     image: "",
     defaultSalesPrice: raw.salesUnitPrice,
@@ -2572,8 +2592,11 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       updatedAt: now()
     };
     db.sales_orders.push(order);
+    let createdProductCount = 0;
     for (const raw of parsed.items) {
+      const productCountBefore = db.products.length;
       const product = ensureImportedProduct(db, raw);
+      if (db.products.length > productCountBefore) createdProductCount += 1;
       db.sales_order_items.push(salesItem(order.id, { ...raw, productId: product.id }));
     }
     const orderDir = path.join(UPLOAD_DIR, order.orderNo.replace(/[^a-zA-Z0-9_-]/g, "_"));
@@ -2604,6 +2627,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         fileOrderNo,
         pages: extracted.pages,
         itemCount: parsed.items.length,
+        createdProductCount,
         grandTotal: parsed.grandTotal
       }
     });

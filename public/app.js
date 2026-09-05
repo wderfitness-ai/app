@@ -794,7 +794,8 @@ function bindSalesOrderImport() {
     $("#importOrderResult").innerHTML = `<p class="notice">正在上传并识别 PDF，请稍候...</p>`;
     try {
       const result = await importSalesOrderPdfFile(file);
-      $("#importOrderResult").innerHTML = `<p class="notice">已识别 ${result.parsed.itemCount} 条产品明细，订单号 ${result.order.orderNo}。</p>`;
+      const createdProductText = Number(result.parsed.createdProductCount || 0) > 0 ? `已自动新增 ${result.parsed.createdProductCount} 个产品到产品库。` : "产品库无需新增。";
+      $("#importOrderResult").innerHTML = `<p class="notice">已识别 ${result.parsed.itemCount} 条产品明细，订单号 ${result.order.orderNo}。${createdProductText}</p>`;
       go(`/admin/orders/${result.order.id}`);
     } catch (error) {
       $("#importOrderResult").innerHTML = `<p class="notice">导入失败：${error.message}</p>`;
