@@ -950,7 +950,7 @@ function chatMessageHtml(message) {
   return `<div class="chat-message ${own ? "own" : ""}">
     <div class="chat-bubble">
       <div class="chat-meta">${escapeHtml(message.authorName || "用户")} · ${roleLabel(message.authorRole)} · ${formatChinaDateTime(message.createdAt)}</div>
-      ${message.message ? `<div>${escapeHtml(message.message || "")}</div>` : ""}
+      ${message.message ? `<div class="chat-text">${escapeHtml(message.message || "")}</div>` : ""}
       ${attachments.length ? `<div class="chat-attachments">${attachments.map(chatAttachmentHtml).join("")}</div>` : ""}
     </div>
   </div>`;

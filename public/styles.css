@@ -1150,13 +1150,14 @@ tr:hover td { background: var(--hover); }
 }
 
 .chat-bubble {
+  display: grid;
+  gap: 8px;
   max-width: min(680px, 82%);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: transparent;
   line-height: 1.55;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -1167,7 +1168,10 @@ tr:hover td { background: var(--hover); }
 .chat-meta {
   color: var(--muted);
   font-size: 12px;
-  margin-bottom: 5px;
+}
+
+.chat-text {
+  white-space: pre-wrap;
 }
 
 .chat-attachments {
