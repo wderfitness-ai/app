@@ -136,7 +136,8 @@ const UNIT_LABELS = {
   pair: "双",
   set: "套",
   kg: "千克",
-  lb: "磅"
+  lb: "磅",
+  sqm: "平方米"
 };
 
 const CHINA_TIMEZONE = "Asia/Shanghai";
@@ -2594,7 +2595,7 @@ function productFields() {
     { name: "image", label: "产品图片" },
     { name: "defaultSalesPrice", label: "默认销售单价", type: "number" },
     { name: "defaultPurchasePrice", label: "默认工厂采购价", type: "number" },
-    { name: "unit", label: "单位", type: "select", options: ["piece", "pair", "set", "kg", "lb"] },
+    { name: "unit", label: "单位", type: "select", options: ["piece", "pair", "set", "kg", "lb", "sqm"] },
     { name: "weight", label: "重量", type: "number" },
     { name: "packageSize", label: "包装尺寸" },
     { name: "remark", label: "备注", type: "textarea" }
