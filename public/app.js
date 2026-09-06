@@ -213,6 +213,23 @@ function bindThemeControls() {
   applyTheme();
 }
 
+async function manualRefresh(button) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "刷新中...";
+  }
+  try {
+    state.cache = {};
+    await render();
+  } catch (error) {
+    alert(`刷新失败：${error.message}`);
+    if (button) {
+      button.disabled = false;
+      button.textContent = "刷新";
+    }
+  }
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -391,6 +408,7 @@ function shell(content) {
           <div><strong>${state.user.name}</strong><span class="tag blue" style="margin-left:8px">${roleLabel(state.user.role)}</span></div>
           <div class="topbar-actions">
             ${themeControlHtml()}
+            <button class="btn small" id="manualRefreshBtn" type="button">刷新</button>
             <div class="notification-wrap">
               <button class="btn small notification-btn" id="notificationBtn" type="button">通知 <span id="notificationBadge" class="badge hidden">0</span></button>
               <div class="notification-menu hidden" id="notificationMenu">
@@ -426,6 +444,7 @@ function shell(content) {
     history.pushState(null, "", "/");
     renderLogin();
   });
+  $("#manualRefreshBtn")?.addEventListener("click", (event) => manualRefresh(event.currentTarget));
   bindNotificationMenu();
   bindThemeControls();
   refreshNotifications();
