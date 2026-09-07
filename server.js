@@ -521,6 +521,29 @@ function visibleSalesOrdersForUser(db, user) {
   return db.sales_orders.filter((so) => !isDeleted(so) && (user.role !== ROLE.SALES || so.salesId === user.id));
 }
 
+function logisticsPackageMeasurementsForOrder(db, salesOrderId) {
+  const purchaseOrders = (db.purchase_orders || []).filter((po) => !isDeleted(po) && po.salesOrderId === salesOrderId);
+  const measurements = purchaseOrders.flatMap((po) => (Array.isArray(po.packageMeasurements) ? po.packageMeasurements : [])
+    .map((item, index) => ({
+      purchaseOrderId: po.id,
+      poNo: po.poNo || "",
+      label: item.label || `第 ${index + 1} 件`,
+      length: item.length || "",
+      width: item.width || "",
+      height: item.height || "",
+      weight: item.weight || "",
+      unit: item.unit || "cm",
+      weightUnit: item.weightUnit || "kg"
+    }))
+    .filter((item) => item.length || item.width || item.height || item.weight));
+  const text = measurements.map((item) => {
+    const size = [item.length, item.width, item.height].filter(Boolean).join("×");
+    const weight = item.weight ? `${item.weight}${item.weightUnit}` : "";
+    return [item.poNo, item.label, size ? `${size}${item.unit}` : "", weight].filter(Boolean).join(" ");
+  }).join("；");
+  return { measurements, text };
+}
+
 function visibleLogisticsOrders(db, user) {
   if (![ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS].includes(user?.role)) return [];
   return db.sales_orders
@@ -532,15 +555,19 @@ function visibleLogisticsOrders(db, user) {
     .map((order) => {
       const customer = db.customers.find((item) => item.id === order.customerId);
       const company = db.logistics_companies?.find((item) => item.id === order.logisticsCompanyId);
+      const packageData = logisticsPackageMeasurementsForOrder(db, order.id);
       return {
         id: order.id,
         orderNo: order.orderNo || "",
         customerName: customer?.name || customer?.company || "",
         customerCompany: customer?.company || "",
         address: order.destinationAddress || customer?.address || "",
+        customerPhone: customer?.phone || order.customerPhone || "",
         logisticsTrackingNumber: order.logisticsTrackingNumber || "",
         logisticsCompanyId: order.logisticsCompanyId || "",
         logisticsCompanyName: company?.name || "",
+        packageMeasurements: packageData.measurements,
+        packageMeasurementsText: packageData.text,
         expectedDeliveryDate: order.expectedDeliveryDate || "",
         status: order.status || "",
         updatedAt: order.updatedAt || ""
@@ -2956,7 +2983,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     if (method === "GET") {
       if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
       const query = listQuery(url);
-      const rows = filterGeneric(visibleLogisticsOrders(db, user), query, ["orderNo", "customerName", "customerCompany", "address", "logisticsTrackingNumber"], "expectedDeliveryDate");
+      const rows = filterGeneric(visibleLogisticsOrders(db, user), query, ["orderNo", "customerName", "customerCompany", "address", "customerPhone", "logisticsTrackingNumber", "packageMeasurementsText"], "expectedDeliveryDate");
       return json(res, 200, {
         ...paginate(rows, query),
         logisticsCompanies: (db.logistics_companies || [])

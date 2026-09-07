@@ -947,7 +947,7 @@ async function renderLogisticsOrders() {
     <section class="panel">
       <div class="toolbar">
         <div class="filters">
-          <input class="input" id="logisticsSearch" placeholder="搜索订单号、客户、地址、物流单号">
+          <input class="input" id="logisticsSearch" placeholder="搜索订单号、客户、地址、电话、包装、物流单号">
           <select class="select" id="logisticsSort">
             <option value="expectedDeliveryDate">按交期</option>
             <option value="orderNo">按订单号</option>
@@ -980,14 +980,16 @@ async function renderLogisticsOrders() {
 function logisticsOrdersTable(rows = [], logisticsCompanies = []) {
   if (!rows.length) return `<p class="muted">暂无订单</p>`;
   const canAssignLogistics = ["Admin", "Merchandiser"].includes(state.user.role);
-  const colSpan = canAssignLogistics ? 7 : 6;
+  const colSpan = canAssignLogistics ? 9 : 8;
   return `<div class="table-wrap"><table>
-    <thead><tr><th>订单号</th><th>客户名字</th><th>地址</th><th>预计交期</th>${canAssignLogistics ? "<th>承接物流公司</th>" : ""}<th>物流单号</th><th>操作</th></tr></thead>
+    <thead><tr><th>订单号</th><th>客户名字</th><th>地址</th><th>电话</th><th>预计交期</th><th>包装尺寸</th>${canAssignLogistics ? "<th>承接物流公司</th>" : ""}<th>物流单号</th><th>操作</th></tr></thead>
     <tbody>${rows.map((row) => `<tr data-logistics-order="${row.id}">
       <td><strong>${displayValue(row.orderNo)}</strong></td>
       <td>${displayValue(row.customerName || row.customerCompany)}</td>
       <td>${displayValue(row.address)}</td>
+      <td>${displayValue(row.customerPhone)}</td>
       <td>${displayValue(row.expectedDeliveryDate)}</td>
+      <td>${logisticsPackageMeasurements(row.packageMeasurements || [], row.packageMeasurementsText || "")}</td>
       ${canAssignLogistics ? `<td>
         <select class="select logistics-company-select" data-assign-logistics="${row.id}">
           <option value="">未分配</option>
@@ -1003,6 +1005,23 @@ function logisticsOrdersTable(rows = [], logisticsCompanies = []) {
       <td><button class="btn small primary" data-save-logistics="${row.id}" type="button">保存单号</button></td>
     </tr><tr class="logistics-track-row hidden" data-track-result="${row.id}"><td colspan="${colSpan}"><div class="logistics-track-box">请点击“追踪轨迹”查询。</div></td></tr>`).join("")}</tbody>
   </table></div>`;
+}
+
+function logisticsPackageMeasurements(measurements = [], fallback = "") {
+  const valid = measurements.filter((item) => item.length || item.width || item.height || item.weight);
+  if (!valid.length) return fallback ? displayValue(fallback) : `<span class="muted">暂无包装尺寸</span>`;
+  const visible = valid.slice(0, 3);
+  const hiddenCount = valid.length - visible.length;
+  return `<div class="logistics-package-list">
+    ${visible.map((item) => {
+      const size = [item.length, item.width, item.height].filter(Boolean).map((value) => escapeHtml(value)).join("×");
+      const unit = escapeHtml(item.unit || "cm");
+      const weight = item.weight ? `${escapeHtml(item.weight)}${escapeHtml(item.weightUnit || "kg")}` : "";
+      const parts = [size ? `${size}${unit}` : "", weight].filter(Boolean).join(" / ");
+      return `<div class="logistics-package-item"><span>${escapeHtml(item.label || "包装")}</span>${parts ? `<strong>${parts}</strong>` : ""}</div>`;
+    }).join("")}
+    ${hiddenCount > 0 ? `<div class="muted">另 ${hiddenCount} 件</div>` : ""}
+  </div>`;
 }
 
 function bindLogisticsAssignControls(onDone) {

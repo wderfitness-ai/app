@@ -1196,6 +1196,31 @@ tr:hover td { background: var(--hover); }
   align-items: center;
 }
 
+.logistics-package-list {
+  display: grid;
+  gap: 5px;
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.logistics-package-item {
+  display: grid;
+  gap: 2px;
+  line-height: 1.35;
+}
+
+.logistics-package-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.logistics-package-item strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .logistics-track-row td {
   background: var(--panel-2);
   padding: 0;
