@@ -904,6 +904,11 @@ tr:hover td { background: var(--hover); }
   margin-bottom: 4px;
 }
 
+.field strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .purchase-finance {
   margin-top: 14px;
   padding: 14px;

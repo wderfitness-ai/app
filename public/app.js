@@ -2025,6 +2025,12 @@ async function renderSalesOrderDetail(id) {
       </div>
       <div class="detail-grid">
         ${field("客户", `${order.customerCompany} / ${order.customerName}`)}
+        ${field("联系人", order.customerContact)}
+        ${field("客户邮箱", order.customerEmail)}
+        ${field("客户电话", order.customerPhone)}
+        ${field("WhatsApp", order.customerWhatsapp)}
+        ${field("客户国家", order.customerCountry || order.destinationCountry)}
+        ${field("客户地址", order.customerAddress)}
         ${field("交货方式", deliveryLabel(order.deliveryTerm))}
         ${field("目的地", `${order.destinationCountry} ${order.destinationAddress}`)}
         ${field("预计交期", order.expectedDeliveryDate)}
