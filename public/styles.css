@@ -1251,6 +1251,18 @@ tr:hover td { background: var(--hover); }
   font-size: 13px;
 }
 
+.bilingual-line {
+  display: grid;
+  gap: 3px;
+}
+
+.bilingual-line em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .logistics-track-events {
   display: grid;
   gap: 8px;

@@ -1110,28 +1110,84 @@ function logisticsTrackResult(data = {}) {
   const records = Array.isArray(data.records) ? data.records : [];
   if (!records.length) {
     return `<div class="logistics-track-summary">
-      <strong>暂无轨迹</strong>
-      <span>${escapeHtml(data.message || "未查询到该运单号的物流轨迹，请确认单号是否正确。")}</span>
+      <strong>暂无轨迹 / No tracking events</strong>
+      ${bilingualLine(data.message || "未查询到该运单号的物流轨迹，请确认单号是否正确。")}
     </div>`;
   }
   return records.map((record) => {
     const events = Array.isArray(record.events) ? record.events : [];
+    const summaryText = [
+      `转单号：${record.transferNumber || "-"}`,
+      `客户单号：${record.customerReference || "-"}`,
+      `目的地：${record.destination || "-"}`,
+      data.usedCustomerNo ? `已使用客户编号 ${data.usedCustomerNo}` : ""
+    ].filter(Boolean).join(" · ");
     return `<div class="logistics-track-record">
       <div class="logistics-track-summary">
         <strong>${escapeHtml(record.trackingNumber || data.trackingNumber || "-")}</strong>
-        <span>转单号：${escapeHtml(record.transferNumber || "-")} · 客户单号：${escapeHtml(record.customerReference || "-")} · 目的地：${escapeHtml(record.destination || "-")}${data.usedCustomerNo ? ` · 已使用客户编号 ${escapeHtml(data.usedCustomerNo)}` : ""}</span>
+        ${bilingualLine(summaryText)}
       </div>
       ${events.length ? `<div class="logistics-track-events">
         ${events.map((event) => `<div class="logistics-track-event">
           <div class="logistics-track-time">${escapeHtml(event.time || "-")}</div>
           <div>
-            <strong>${escapeHtml(event.station || "-")}</strong>
-            <p>${escapeHtml(event.remark || event.status || "-")}</p>
+            ${bilingualLine(event.station || "-", "strong")}
+            ${bilingualLine(event.remark || event.status || "-", "p")}
           </div>
         </div>`).join("")}
-      </div>` : `<p class="muted">${escapeHtml(record.latestRemark || "暂无详细轨迹")}</p>`}
+      </div>` : bilingualLine(record.latestRemark || "暂无详细轨迹", "p")}
     </div>`;
   }).join("");
+}
+
+function bilingualLine(text = "", tag = "span") {
+  const original = String(text || "-");
+  const translated = translateLogisticsTraceText(original);
+  const safeTag = ["span", "strong", "p"].includes(tag) ? tag : "span";
+  const english = translated && translated !== original ? `<em>${escapeHtml(translated)}</em>` : "";
+  return `<${safeTag} class="bilingual-line"><span>${escapeHtml(original)}</span>${english}</${safeTag}>`;
+}
+
+function translateLogisticsTraceText(text = "") {
+  let output = String(text || "");
+  if (!output || output === "-") return output;
+  const replacements = [
+    [/转单号：/g, "Transfer No.: "],
+    [/客户单号：/g, "Customer Ref.: "],
+    [/目的地：/g, "Destination: "],
+    [/已使用客户编号/g, "Customer No. used: "],
+    [/暂无详细轨迹/g, "No detailed tracking events yet"],
+    [/未查询到该运单号的物流轨迹，请确认单号是否正确。/g, "No tracking events were found for this tracking number. Please confirm the number is correct."],
+    [/延误到港时间/g, "Delayed arrival date "],
+    [/清关已放行/g, "Customs clearance released"],
+    [/实际开船时间/g, "Actual sailing date "],
+    [/预计到港时间/g, "Estimated arrival date "],
+    [/国内报关已放行/g, "Export customs declaration released"],
+    [/国内/g, "China domestic"],
+    [/报关/g, "customs declaration"],
+    [/放行/g, "released"],
+    [/开船/g, "vessel departed"],
+    [/到港/g, "arrived at port"],
+    [/预计/g, "estimated"],
+    [/实际/g, "actual"],
+    [/船名\/班列/g, "Vessel/Train"],
+    [/航班次/g, "Voyage/Flight No."],
+    [/航线/g, "Service"],
+    [/目的港\(站\)/g, "Destination port/station"],
+    [/起运港\(站\)/g, "Port/station of departure"],
+    [/目的港/g, "Destination port"],
+    [/起运港/g, "Port of departure"],
+    [/船名/g, "Vessel"],
+    [/航班/g, "Flight"],
+    [/美国/g, "United States"],
+    [/中国/g, "China"],
+    [/已/g, ""],
+    [/暂无轨迹/g, "No tracking events"],
+  ];
+  replacements.forEach(([pattern, value]) => {
+    output = output.replace(pattern, value);
+  });
+  return output.replace(/，/g, ", ").replace(/；/g, "; ").replace(/：/g, ": ").replace(/\s+/g, " ").trim();
 }
 
 async function renderChatsPage(selectedPurchaseOrderId = "") {
