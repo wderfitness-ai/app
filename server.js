@@ -13,6 +13,7 @@ import PDFDocument from "pdfkit";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const DATA_FILE = process.env.DATA_FILE || (process.env.VERCEL ? path.join("/tmp", "trade-order-database.json") : path.join(__dirname, "data", "database.json"));
+const PROTECTED_DB_FILE = path.join(__dirname, "protected-data", "order-baseline.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const UPLOAD_DIR = process.env.UPLOAD_DIR || (process.env.VERCEL ? path.join("/tmp", "trade-order-uploads") : path.join(__dirname, "uploads"));
 const FACTORY_LICENSE_DIR = path.join(UPLOAD_DIR, "factory_licenses");
@@ -27,9 +28,30 @@ const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
 const SESSION_SECRET = process.env.SESSION_SECRET || process.env.BOOTSTRAP_ADMIN_PASSWORD || "local-development-session-secret";
 const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 18_000_000);
 const BLOB_DB_PATH = process.env.BLOB_DB_PATH || "data/trade-order-database.json";
+const PROTECTED_DB_BLOB_PATH = process.env.PROTECTED_DB_BLOB_PATH || "data/protected-order-baseline.json";
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 const ALLOW_ORDER_DATA_SHRINK = process.env.ALLOW_ORDER_DATA_SHRINK === "true";
+const PROTECTED_COLLECTION_KEYS = [
+  "users",
+  "customers",
+  "factories",
+  "logistics_companies",
+  "products",
+  "sales_orders",
+  "sales_order_items",
+  "purchase_orders",
+  "purchase_order_items",
+  "order_files",
+  "order_timeline",
+  "qc_reports",
+  "qc_report_items",
+  "payments",
+  "reminders",
+  "delivery_change_requests",
+  "chat_messages",
+  "notifications"
+];
 const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ENMAO_TRACKING_ENDPOINT = "https://vip.yjtms.com:11000/tms-saas-oms/oms/tms/tracequery/out/list";
 const ENMAO_TRACKING_COMPANY_ID = "40";
@@ -162,6 +184,111 @@ function emptyDb() {
   };
 }
 
+function parseProtectedBaselineDb(raw) {
+  const db = JSON.parse(raw);
+  ensureDbShape(db);
+  return db;
+}
+
+function loadLocalProtectedBaselineDb() {
+  try {
+    if (!existsSync(PROTECTED_DB_FILE)) return null;
+    return parseProtectedBaselineDb(readFileSync(PROTECTED_DB_FILE, "utf8"));
+  } catch (error) {
+    console.error("Failed to load protected data baseline", error);
+    return null;
+  }
+}
+
+async function loadProtectedBaselineDb() {
+  if (USE_BLOB_DB) {
+    try {
+      const blobOptions = { access: "private", useCache: false };
+      if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+      const stored = await blobGet(PROTECTED_DB_BLOB_PATH, blobOptions);
+      if (!stored?.stream) return null;
+      return parseProtectedBaselineDb(await new Response(stored.stream).text());
+    } catch (error) {
+      console.error("Failed to load protected Blob data baseline", error);
+      return null;
+    }
+  }
+  return loadLocalProtectedBaselineDb();
+}
+
+async function saveProtectedBaselineDb(db) {
+  const content = JSON.stringify(db, null, 2);
+  if (USE_BLOB_DB) {
+    const blobOptions = {
+      access: "private",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "application/json",
+      cacheControlMaxAge: 60
+    };
+    if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+    await blobPut(PROTECTED_DB_BLOB_PATH, content, blobOptions);
+    return;
+  }
+  await mkdir(path.dirname(PROTECTED_DB_FILE), { recursive: true });
+  await writeFile(PROTECTED_DB_FILE, content);
+}
+
+function protectedRecordKey(item, collectionKey) {
+  if (!item || typeof item !== "object") return "";
+  if (item.id) return String(item.id);
+  if (collectionKey === "users" && item.email) return `email:${String(item.email).toLowerCase()}`;
+  if (collectionKey === "sales_orders" && item.orderNo) return `order:${item.orderNo}`;
+  if (collectionKey === "purchase_orders" && item.poNo) return `purchase:${item.poNo}`;
+  if (collectionKey === "customers" && (item.company || item.name)) return `customer:${item.company || item.name}`;
+  if (collectionKey === "factories" && item.name) return `factory:${item.name}`;
+  if (collectionKey === "logistics_companies" && (item.name || item.email)) return `logistics:${item.name || item.email}`;
+  if (collectionKey === "products" && (item.model || item.name)) return `product:${item.model || item.name}`;
+  if (collectionKey === "order_files" && (item.path || item.fileName)) return `file:${item.path || item.fileName}`;
+  if (collectionKey === "order_timeline" && (item.orderId || item.createdAt || item.note)) return `timeline:${item.orderId || ""}:${item.createdAt || ""}:${item.note || item.newStatus || ""}`;
+  return JSON.stringify(item);
+}
+
+function mergeProtectedArray(collectionKey, ...sources) {
+  const map = new Map();
+  for (const source of sources) {
+    for (const item of Array.isArray(source?.[collectionKey]) ? source[collectionKey] : []) {
+      const key = protectedRecordKey(item, collectionKey);
+      if (!key) continue;
+      map.set(key, { ...(map.get(key) || {}), ...item });
+    }
+  }
+  return [...map.values()];
+}
+
+function protectedCounts(db) {
+  return Object.fromEntries(PROTECTED_COLLECTION_KEYS.map((key) => [key, Array.isArray(db?.[key]) ? db[key].length : 0]));
+}
+
+function shouldRepairFromBaseline(db, baseline) {
+  if (!baseline) return false;
+  return PROTECTED_COLLECTION_KEYS.some((key) => {
+    const baselineCount = Array.isArray(baseline[key]) ? baseline[key].length : 0;
+    const currentCount = Array.isArray(db?.[key]) ? db[key].length : 0;
+    return baselineCount > 0 && currentCount < baselineCount;
+  });
+}
+
+function mergeProtectedDb(nextDb, currentDb = null, baseline = null) {
+  if (!baseline && !currentDb) return { db: nextDb, changed: false };
+  const merged = { ...nextDb };
+  const before = protectedCounts(nextDb);
+  for (const key of PROTECTED_COLLECTION_KEYS) {
+    merged[key] = mergeProtectedArray(key, baseline, currentDb, nextDb);
+  }
+  ensureDbShape(merged);
+  const after = protectedCounts(merged);
+  return {
+    db: merged,
+    changed: PROTECTED_COLLECTION_KEYS.some((key) => after[key] !== before[key])
+  };
+}
+
 async function readDb() {
   if (USE_BLOB_DB) {
     const blobOptions = { access: "private", useCache: false };
@@ -169,11 +296,23 @@ async function readDb() {
     const stored = await blobGet(BLOB_DB_PATH, blobOptions);
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
     ensureDbShape(db);
+    const baseline = await loadProtectedBaselineDb();
+    if (!ALLOW_ORDER_DATA_SHRINK && shouldRepairFromBaseline(db, baseline)) {
+      const { db: repairedDb } = mergeProtectedDb(db, null, baseline);
+      await writeDb(repairedDb);
+      return repairedDb;
+    }
     return db;
   }
   await ensureDataFile();
   const db = JSON.parse(await readFile(DATA_FILE, "utf8"));
   const changed = ensureDbShape(db);
+  const baseline = await loadProtectedBaselineDb();
+  if (!ALLOW_ORDER_DATA_SHRINK && shouldRepairFromBaseline(db, baseline)) {
+    const { db: repairedDb } = mergeProtectedDb(db, null, baseline);
+    await writeDb(repairedDb);
+    return repairedDb;
+  }
   if (changed) await writeDb(db);
   return db;
 }
@@ -207,6 +346,8 @@ function ensureDbShape(db) {
 
 async function writeDb(db) {
   if (USE_BLOB_DB) {
+    let dbToWrite = db;
+    let currentDb = null;
     const blobOptions = {
       access: "private",
       allowOverwrite: true,
@@ -216,20 +357,26 @@ async function writeDb(db) {
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
     if (!ALLOW_ORDER_DATA_SHRINK) {
       const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false, ...(BLOB_READ_WRITE_TOKEN ? { token: BLOB_READ_WRITE_TOKEN } : {}) });
-      const currentDb = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
+      currentDb = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
+      if (currentDb) ensureDbShape(currentDb);
+      const baseline = await loadProtectedBaselineDb();
+      const protectedMerge = mergeProtectedDb(db, currentDb, baseline);
+      dbToWrite = protectedMerge.db;
       const currentSales = Array.isArray(currentDb?.sales_orders) ? currentDb.sales_orders.length : 0;
       const currentPurchase = Array.isArray(currentDb?.purchase_orders) ? currentDb.purchase_orders.length : 0;
-      const nextSales = Array.isArray(db.sales_orders) ? db.sales_orders.length : 0;
-      const nextPurchase = Array.isArray(db.purchase_orders) ? db.purchase_orders.length : 0;
+      const nextSales = Array.isArray(dbToWrite.sales_orders) ? dbToWrite.sales_orders.length : 0;
+      const nextPurchase = Array.isArray(dbToWrite.purchase_orders) ? dbToWrite.purchase_orders.length : 0;
       if ((currentSales > 0 && nextSales < currentSales) || (currentPurchase > 0 && nextPurchase < currentPurchase)) {
         throw new Error(`Refusing to shrink order data: sales_orders ${currentSales} -> ${nextSales}, purchase_orders ${currentPurchase} -> ${nextPurchase}`);
       }
     }
-    await blobPut(BLOB_DB_PATH, JSON.stringify(db, null, 2), blobOptions);
+    await blobPut(BLOB_DB_PATH, JSON.stringify(dbToWrite, null, 2), blobOptions);
     return;
   }
   await mkdir(path.dirname(DATA_FILE), { recursive: true });
-  await writeFile(DATA_FILE, JSON.stringify(db, null, 2));
+  const baseline = await loadProtectedBaselineDb();
+  const { db: dbToWrite } = ALLOW_ORDER_DATA_SHRINK ? { db } : mergeProtectedDb(db, null, baseline);
+  await writeFile(DATA_FILE, JSON.stringify(dbToWrite, null, 2));
 }
 
 function id(prefix) {
@@ -2540,6 +2687,27 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     logisticsCompanies: (db.logistics_companies || []).map((company) => ({ id: company.id, name: company.name }))
   });
   if (!requireAuth(user, res)) return;
+
+  if (resource === "protected-baseline" && method === "POST") {
+    if (!requireRole(user, res, [ROLE.ADMIN])) return;
+    const body = await bodyJson(req);
+    const baseline = body.baseline && typeof body.baseline === "object" ? body.baseline : null;
+    if (!baseline) return json(res, 400, { error: "缺少恢复基线数据" });
+    ensureDbShape(baseline);
+    const baselineSales = Array.isArray(baseline.sales_orders) ? baseline.sales_orders.length : 0;
+    const baselinePurchase = Array.isArray(baseline.purchase_orders) ? baseline.purchase_orders.length : 0;
+    if (baselineSales <= 0 || baselinePurchase <= 0) return json(res, 400, { error: "恢复基线必须包含客户订单和工厂采购单" });
+    const { db: protectedBaseline } = mergeProtectedDb(baseline, db, baseline);
+    await saveProtectedBaselineDb(protectedBaseline);
+    const { db: repairedDb } = mergeProtectedDb(db, null, protectedBaseline);
+    audit(repairedDb, user, "database", "protected-baseline", "restore", protectedCounts(db), protectedCounts(repairedDb));
+    await writeDb(repairedDb);
+    return json(res, 200, {
+      ok: true,
+      protectedBaseline: protectedCounts(protectedBaseline),
+      restored: protectedCounts(repairedDb)
+    });
+  }
 
   if (resource === "notifications") {
     if (method === "GET") {
