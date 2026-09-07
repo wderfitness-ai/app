@@ -1032,6 +1032,11 @@ function bindAdaptiveTimelines() {
   syncAdaptiveTimelines();
   window.removeEventListener("resize", syncAdaptiveTimelines);
   window.addEventListener("resize", syncAdaptiveTimelines);
+  $$("[data-toggle-timeline]").forEach((btn) => btn.addEventListener("click", () => {
+    const panel = btn.closest(".adaptive-timeline-panel");
+    const expanded = panel?.classList.toggle("timeline-expanded");
+    btn.textContent = expanded ? "收起" : "展开全部";
+  }));
 }
 
 function bindLogisticsTrackingButtons(onDone) {
@@ -1781,10 +1786,7 @@ async function renderSalesOrderDetail(id) {
         </div>
         ${simpleTable(order.purchaseOrders, ["poNo", "factoryName", "productionStatus", "qcStatus", "actions"], ["采购单号", "工厂", "生产状态", "质检", "操作"], (row, key) => key === "actions" ? `<button class="btn small" data-po="${row.id}">查看</button> <button class="btn small" data-chat-po="${row.id}">留言</button>` : displayValue(row[key]))}
       </div>
-      <div class="panel adaptive-timeline-panel">
-        <h2>订单时间线</h2>
-        <div class="timeline timeline-scroll compact-timeline">${order.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
-      </div>
+      ${timelinePanel("订单时间线", order.timeline)}
     </section>
     ${filePanel(order)}
     <section class="panel" style="margin-top:14px">
@@ -1868,10 +1870,7 @@ function purchaseOrderView(po, factoryMode) {
         ${qcPhotoPanel(po)}
         ${factoryMode ? "" : `<button class="btn primary" id="createQc">完成质检</button>`}
       </div>
-      <div class="panel adaptive-timeline-panel">
-        <h2>时间线</h2>
-        <div class="timeline timeline-scroll compact-timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
-      </div>
+      ${timelinePanel("时间线", po.timeline)}
     </section>
     ${filePanel(po, true)}
     <section class="panel" style="margin-top:14px">
@@ -2613,6 +2612,22 @@ function permissionMatrix() {
 function simpleTable(rows = [], keys = [], labels = keys, cell = (row, key) => displayValue(row[key])) {
   if (!rows.length) return `<p class="muted">暂无数据</p>`;
   return `<div class="table-wrap"><table><thead><tr>${labels.map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${keys.map((key) => `<td>${cell(row, key)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function timelinePanel(title, timeline = []) {
+  const rows = timeline.length
+    ? timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${escapeHtml(tl.actorName || "")} · ${formatChinaDateTime(tl.createdAt)}</span><p>${escapeHtml(tl.note || "")}</p></div>`).join("")
+    : `<p class="muted">暂无记录</p>`;
+  return `<div class="panel adaptive-timeline-panel">
+    <div class="panel-title-row timeline-title-row">
+      <h2>${escapeHtml(title)}</h2>
+      <div class="timeline-title-actions">
+        <span class="muted">共 ${timeline.length} 条</span>
+        ${timeline.length > 4 ? `<button class="btn small" type="button" data-toggle-timeline>展开全部</button>` : ""}
+      </div>
+    </div>
+    <div class="timeline timeline-scroll compact-timeline">${rows}</div>
+  </div>`;
 }
 
 function field(label, value) {

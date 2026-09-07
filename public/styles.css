@@ -1056,6 +1056,28 @@ tr:hover td { background: var(--hover); }
   flex: 0 0 auto;
 }
 
+.timeline-title-row {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+}
+
+.timeline-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.adaptive-timeline-panel.timeline-expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.adaptive-timeline-panel.timeline-expanded .timeline-scroll {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .timeline-scroll {
   max-height: var(--timeline-scroll-max-height, min(366px, calc(100vh - 294px)));
   overflow-y: auto;
