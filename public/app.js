@@ -1020,11 +1020,11 @@ function syncAdaptiveTimelines() {
     const timelinePanel = split.querySelector(".adaptive-timeline-panel");
     const timeline = split.querySelector(".timeline-scroll");
     if (!leftPanel || !timelinePanel || !timeline) return;
-    const viewportLimit = Math.max(280, window.innerHeight - 230);
+    const viewportLimit = Math.max(300, window.innerHeight - 230);
     const referenceHeight = Math.max(280, leftPanel.getBoundingClientRect().height);
-    const panelMaxHeight = Math.min(referenceHeight, viewportLimit);
+    const panelMaxHeight = Math.min(referenceHeight, viewportLimit, 430);
     timelinePanel.style.setProperty("--timeline-panel-max-height", `${Math.round(panelMaxHeight)}px`);
-    timeline.style.setProperty("--timeline-scroll-max-height", `${Math.max(180, Math.round(panelMaxHeight - 76))}px`);
+    timeline.style.setProperty("--timeline-scroll-max-height", `${Math.max(190, Math.round(panelMaxHeight - 64))}px`);
   });
 }
 
