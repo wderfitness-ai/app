@@ -1196,8 +1196,13 @@ function bilingualLine(text = "", englishOverride = "", variant = "") {
 function translateLogisticsTraceText(text = "") {
   let output = String(text || "");
   if (!output || output === "-") return output;
+  const plannedWarehouse = output.match(/^计划交仓[，,]\s*当地[：:]\s*(.+)$/);
+  if (plannedWarehouse) return `Planned warehouse handover, local date: ${plannedWarehouse[1]}`;
+  const datedOperation = output.match(/^(\d{1,2})[-/.](\d{1,2})(.+)$/);
+  if (datedOperation) {
+    return `${formatShortMonthDay(datedOperation[1], datedOperation[2])}: ${translateLogisticsOperation(datedOperation[3])}`;
+  }
   const replacements = [
-    [/^(\d+(?:\.\d+)?)清关已放行$/g, "$1 Customs clearance released"],
     [/^延误到港时间(.+)$/g, "Delayed port arrival date: $1"],
     [/^实际开船时间(.+?)预计到港时间(.+)$/g, "Actual sailing date: $1; estimated arrival date: $2"],
     [/转单号：/g, "Transfer No.: "],
@@ -1231,11 +1236,41 @@ function translateLogisticsTraceText(text = "") {
     [/中国/g, "China"],
     [/已/g, ""],
     [/暂无轨迹/g, "No tracking events"],
+    [/计划交仓/g, "Planned warehouse handover"],
+    [/当地/g, "local date"],
+    [/拆柜/g, "container devanning"],
+    [/提柜/g, "container pickup"],
+    [/卸船/g, "vessel discharge"],
+    [/待/g, "pending "],
   ];
   replacements.forEach(([pattern, value]) => {
     output = output.replace(pattern, value);
   });
   return output.replace(/，/g, ", ").replace(/；/g, "; ").replace(/：/g, ": ").replace(/\s+/g, " ").trim();
+}
+
+function formatShortMonthDay(month, day) {
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthIndex = Number(month) - 1;
+  const monthName = monthNames[monthIndex] || String(month).padStart(2, "0");
+  return `${monthName} ${Number(day)}`;
+}
+
+function translateLogisticsOperation(raw = "") {
+  const text = String(raw || "").replace(/^[-\s]+/, "").trim();
+  const parts = text.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+  const translated = parts.map((part) => {
+    if (part === "清关已放行") return "customs clearance released";
+    if (part === "国内报关已放行") return "export customs declaration released";
+    if (part === "拆柜") return "container devanning completed";
+    if (part === "提柜") return "container picked up";
+    if (part === "卸船") return "vessel discharged";
+    if (part === "待拆柜") return "awaiting container devanning";
+    if (part === "待提柜") return "awaiting container pickup";
+    if (part === "待卸船") return "awaiting vessel discharge";
+    return translateLogisticsTraceText(part);
+  });
+  return translated.join(", ");
 }
 
 async function renderChatsPage(selectedPurchaseOrderId = "") {
