@@ -516,7 +516,11 @@ function visibleSalesOrdersForUser(db, user) {
 function visibleLogisticsOrders(db, user) {
   if (![ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS].includes(user?.role)) return [];
   return db.sales_orders
-    .filter((order) => !isDeleted(order))
+    .filter((order) => {
+      if (isDeleted(order)) return false;
+      if (isLogistics(user)) return Boolean(user.logisticsCompanyId) && order.logisticsCompanyId === user.logisticsCompanyId;
+      return true;
+    })
     .map((order) => {
       const customer = db.customers.find((item) => item.id === order.customerId);
       const company = db.logistics_companies?.find((item) => item.id === order.logisticsCompanyId);
@@ -2838,33 +2842,61 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
       const query = listQuery(url);
       const rows = filterGeneric(visibleLogisticsOrders(db, user), query, ["orderNo", "customerName", "customerCompany", "address", "logisticsTrackingNumber"], "expectedDeliveryDate");
-      return json(res, 200, paginate(rows, query));
+      return json(res, 200, {
+        ...paginate(rows, query),
+        logisticsCompanies: (db.logistics_companies || [])
+          .filter((company) => company.enabled !== false)
+          .map((company) => ({ id: company.id, name: company.name }))
+      });
     }
     if (method === "PATCH" && resourceId) {
       if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
       const order = db.sales_orders.find((item) => item.id === resourceId);
       if (!order || isDeleted(order)) return json(res, 404, { error: "Order not found" });
+      if (isLogistics(user) && (!user.logisticsCompanyId || order.logisticsCompanyId !== user.logisticsCompanyId)) return json(res, 403, { error: "物流账号只能维护已分配给本公司的订单" });
       const body = await bodyJson(req);
       const before = { ...order };
       const trackingNumber = String(body.logisticsTrackingNumber || "").trim();
-      if (!trackingNumber) return json(res, 400, { error: "请填写国际物流单号" });
-      order.logisticsTrackingNumber = trackingNumber;
-      if (isLogistics(user) && user.logisticsCompanyId) order.logisticsCompanyId = user.logisticsCompanyId;
-      if (!isLogistics(user) && "logisticsCompanyId" in body) order.logisticsCompanyId = String(body.logisticsCompanyId || "");
+      if (!isLogistics(user) && "logisticsCompanyId" in body) {
+        const logisticsCompanyId = String(body.logisticsCompanyId || "");
+        if (logisticsCompanyId && !db.logistics_companies.some((company) => company.id === logisticsCompanyId)) return json(res, 400, { error: "请选择有效的物流公司" });
+        order.logisticsCompanyId = logisticsCompanyId;
+      }
+      if ("logisticsTrackingNumber" in body) {
+        if (!trackingNumber) return json(res, 400, { error: "请填写国际物流单号" });
+        order.logisticsTrackingNumber = trackingNumber;
+      }
       order.updatedAt = now();
-      addTimeline(db, order.id, "sales_order", user, before.logisticsTrackingNumber || "", trackingNumber, "更新国际物流单号");
-      audit(db, user, "sales_order", order.id, "update_logistics_tracking", before, order);
-      notify(db, {
-        actor: user,
-        title: "国际物流单号已更新",
-        message: `订单 ${order.orderNo} 已填写国际物流单号：${trackingNumber}。`,
-        entityType: "sales_order",
-        entityId: order.id,
-        orderNo: order.orderNo,
-        roles: [ROLE.ADMIN, ROLE.SALES, ROLE.MERCH],
-        userIds: order.salesId ? [order.salesId] : [],
-        severity: "info"
-      });
+      if (order.logisticsCompanyId !== before.logisticsCompanyId) {
+        const company = db.logistics_companies.find((item) => item.id === order.logisticsCompanyId);
+        addTimeline(db, order.id, "sales_order", user, before.logisticsCompanyId || "", order.logisticsCompanyId || "", `分配物流公司：${company?.name || "未分配"}`);
+        notify(db, {
+          actor: user,
+          title: "订单已分配物流公司",
+          message: `订单 ${order.orderNo} 已分配给 ${company?.name || "物流公司"} 承接，请维护国际物流单号。`,
+          entityType: "sales_order",
+          entityId: order.id,
+          orderNo: order.orderNo,
+          roles: [ROLE.LOGISTICS],
+          userIds: db.users.filter((item) => item.role === ROLE.LOGISTICS && item.logisticsCompanyId === order.logisticsCompanyId).map((item) => item.id),
+          severity: "info"
+        });
+      }
+      if (order.logisticsTrackingNumber !== before.logisticsTrackingNumber) {
+        addTimeline(db, order.id, "sales_order", user, before.logisticsTrackingNumber || "", order.logisticsTrackingNumber, "更新国际物流单号");
+        notify(db, {
+          actor: user,
+          title: "国际物流单号已更新",
+          message: `订单 ${order.orderNo} 已填写国际物流单号：${order.logisticsTrackingNumber}。`,
+          entityType: "sales_order",
+          entityId: order.id,
+          orderNo: order.orderNo,
+          roles: [ROLE.ADMIN, ROLE.SALES, ROLE.MERCH],
+          userIds: order.salesId ? [order.salesId] : [],
+          severity: "info"
+        });
+      }
+      audit(db, user, "sales_order", order.id, "update_logistics", before, order);
       await writeDb(db);
       return json(res, 200, visibleLogisticsOrders(db, user).find((item) => item.id === order.id));
     }

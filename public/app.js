@@ -966,8 +966,9 @@ async function renderLogisticsOrders() {
       pageSize: "100"
     });
     const data = await api(`/api/logistics-orders?${params}`);
-    $("#logisticsOrdersList").innerHTML = logisticsOrdersTable(data.items || []);
+    $("#logisticsOrdersList").innerHTML = logisticsOrdersTable(data.items || [], data.logisticsCompanies || []);
     bindLogisticsTrackingButtons(load);
+    bindLogisticsAssignControls(load);
   };
   $("#logisticsSearch")?.addEventListener("input", debounce(load, 250));
   $("#logisticsSort")?.addEventListener("change", load);
@@ -975,19 +976,42 @@ async function renderLogisticsOrders() {
   await load();
 }
 
-function logisticsOrdersTable(rows = []) {
+function logisticsOrdersTable(rows = [], logisticsCompanies = []) {
   if (!rows.length) return `<p class="muted">暂无订单</p>`;
+  const canAssignLogistics = ["Admin", "Merchandiser"].includes(state.user.role);
   return `<div class="table-wrap"><table>
-    <thead><tr><th>订单号</th><th>客户名字</th><th>地址</th><th>预计交期</th><th>物流单号</th><th>操作</th></tr></thead>
+    <thead><tr><th>订单号</th><th>客户名字</th><th>地址</th><th>预计交期</th>${canAssignLogistics ? "<th>承接物流公司</th>" : ""}<th>物流单号</th><th>操作</th></tr></thead>
     <tbody>${rows.map((row) => `<tr data-logistics-order="${row.id}">
       <td><strong>${displayValue(row.orderNo)}</strong></td>
       <td>${displayValue(row.customerName || row.customerCompany)}</td>
       <td>${displayValue(row.address)}</td>
       <td>${displayValue(row.expectedDeliveryDate)}</td>
+      ${canAssignLogistics ? `<td>
+        <select class="select logistics-company-select" data-assign-logistics="${row.id}">
+          <option value="">未分配</option>
+          ${logisticsCompanies.map((company) => `<option value="${company.id}" ${company.id === row.logisticsCompanyId ? "selected" : ""}>${company.name}</option>`).join("")}
+        </select>
+      </td>` : ""}
       <td><input class="input logistics-tracking-input" value="${escapeAttr(row.logisticsTrackingNumber || "")}" placeholder="填写国际物流单号"></td>
       <td><button class="btn small primary" data-save-logistics="${row.id}" type="button">保存单号</button></td>
     </tr>`).join("")}</tbody>
   </table></div>`;
+}
+
+function bindLogisticsAssignControls(onDone) {
+  $$("[data-assign-logistics]").forEach((select) => select.addEventListener("change", async () => {
+    select.disabled = true;
+    try {
+      await api(`/api/logistics-orders/${select.dataset.assignLogistics}`, {
+        method: "PATCH",
+        body: JSON.stringify({ logisticsCompanyId: select.value })
+      });
+      await onDone();
+    } catch (error) {
+      alert(error.message || "分配失败");
+      select.disabled = false;
+    }
+  }));
 }
 
 function bindLogisticsTrackingButtons(onDone) {
