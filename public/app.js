@@ -1097,7 +1097,10 @@ function bindLogisticsTrackButtons() {
     btn.disabled = true;
     try {
       const data = await api(`/api/logistics-orders/${orderId}/track?trackingNumber=${encodeURIComponent(trackingNumber)}`);
-      if (box) box.innerHTML = logisticsTrackResult(data);
+      if (box) {
+        box.innerHTML = logisticsTrackResult(data);
+        bindLogisticsTrackCopyButtons(box);
+      }
     } catch (error) {
       if (box) box.innerHTML = `<p class="logistics-track-error">${escapeHtml(error.message || "物流轨迹查询失败，请稍后重试")}</p>`;
     } finally {
@@ -1110,12 +1113,13 @@ function logisticsTrackResult(data = {}) {
   const records = Array.isArray(data.records) ? data.records : [];
   if (!records.length) {
     return `<div class="logistics-track-summary">
-      <strong>暂无轨迹 / No tracking events</strong>
+      ${bilingualLine("暂无轨迹", "No tracking events", "title")}
       ${bilingualLine(data.message || "未查询到该运单号的物流轨迹，请确认单号是否正确。")}
     </div>`;
   }
   return records.map((record) => {
     const events = Array.isArray(record.events) ? record.events : [];
+    const trackingNumber = record.trackingNumber || data.trackingNumber || "-";
     const summaryText = [
       `转单号：${record.transferNumber || "-"}`,
       `客户单号：${record.customerReference || "-"}`,
@@ -1123,35 +1127,79 @@ function logisticsTrackResult(data = {}) {
       data.usedCustomerNo ? `已使用客户编号 ${data.usedCustomerNo}` : ""
     ].filter(Boolean).join(" · ");
     return `<div class="logistics-track-record">
+      <div class="logistics-track-toolbar">
+        <div>
+          ${bilingualLine("轨迹详情", "Tracking details", "title")}
+        </div>
+        <button class="btn small" data-copy-logistics-track type="button">复制轨迹 / Copy</button>
+      </div>
       <div class="logistics-track-summary">
-        <strong>${escapeHtml(record.trackingNumber || data.trackingNumber || "-")}</strong>
+        ${bilingualLine(trackingNumber, `Tracking No.: ${trackingNumber}`, "title")}
         ${bilingualLine(summaryText)}
       </div>
       ${events.length ? `<div class="logistics-track-events">
         ${events.map((event) => `<div class="logistics-track-event">
           <div class="logistics-track-time">${escapeHtml(event.time || "-")}</div>
           <div>
-            ${bilingualLine(event.station || "-", "strong")}
-            ${bilingualLine(event.remark || event.status || "-", "p")}
+            ${bilingualLine(event.station || "-", "", "station")}
+            ${bilingualLine(event.remark || event.status || "-")}
           </div>
         </div>`).join("")}
-      </div>` : bilingualLine(record.latestRemark || "暂无详细轨迹", "p")}
+      </div>` : bilingualLine(record.latestRemark || "暂无详细轨迹")}
     </div>`;
   }).join("");
 }
 
-function bilingualLine(text = "", tag = "span") {
+function bindLogisticsTrackCopyButtons(root = document) {
+  $$("[data-copy-logistics-track]", root).forEach((btn) => btn.addEventListener("click", async () => {
+    const record = btn.closest(".logistics-track-record");
+    const text = logisticsTrackCopyText(record);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      const original = btn.textContent;
+      btn.textContent = "已复制 / Copied";
+      setTimeout(() => {
+        btn.textContent = original;
+      }, 1500);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.left = "-9999px";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+      btn.textContent = "已复制 / Copied";
+    }
+  }));
+}
+
+function logisticsTrackCopyText(record) {
+  if (!record) return "";
+  const clone = record.cloneNode(true);
+  $$("[data-copy-logistics-track]", clone).forEach((btn) => btn.remove());
+  return clone.innerText.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function bilingualLine(text = "", englishOverride = "", variant = "") {
   const original = String(text || "-");
-  const translated = translateLogisticsTraceText(original);
-  const safeTag = ["span", "strong", "p"].includes(tag) ? tag : "span";
-  const english = translated && translated !== original ? `<em>${escapeHtml(translated)}</em>` : "";
-  return `<${safeTag} class="bilingual-line"><span>${escapeHtml(original)}</span>${english}</${safeTag}>`;
+  const translated = englishOverride || translateLogisticsTraceText(original);
+  const english = translated && translated !== original ? `<span class="bilingual-en">${escapeHtml(translated)}</span>` : "";
+  return `<div class="bilingual-line ${variant ? `bilingual-${escapeAttr(variant)}` : ""}">
+    <span class="bilingual-cn">${escapeHtml(original)}</span>
+    ${english}
+  </div>`;
 }
 
 function translateLogisticsTraceText(text = "") {
   let output = String(text || "");
   if (!output || output === "-") return output;
   const replacements = [
+    [/^(\d+(?:\.\d+)?)清关已放行$/g, "$1 Customs clearance released"],
+    [/^延误到港时间(.+)$/g, "Delayed port arrival date: $1"],
+    [/^实际开船时间(.+?)预计到港时间(.+)$/g, "Actual sailing date: $1; estimated arrival date: $2"],
     [/转单号：/g, "Transfer No.: "],
     [/客户单号：/g, "Customer Ref.: "],
     [/目的地：/g, "Destination: "],
