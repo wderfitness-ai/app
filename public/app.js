@@ -1692,6 +1692,7 @@ function purchaseOrderView(po, factoryMode) {
       ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
       ${purchaseFinanceSummary(po)}
     </section>
+    ${packageMeasurementsPanel(po.packageMeasurements || [])}
     <section class="panel" style="margin-top:14px">
       <div class="panel-title-row">
         <h2>订单留言</h2>
@@ -1745,6 +1746,37 @@ function purchaseItemsEditTable(items = [], factoryMode = false) {
       </tr>`).join("")}
     </tbody>
   </table></div>`;
+}
+
+function packageMeasurementsPanel(measurements = []) {
+  const rows = measurements.length ? measurements : [blankPackageMeasurement(0)];
+  return `<section class="panel package-measurement-panel">
+    <div class="panel-title-row">
+      <div>
+        <h2>包装尺寸</h2>
+        <p class="muted">产品生产完成后填写每件包装的长、宽、高和重量，默认一件，可继续添加多件。</p>
+      </div>
+      <button class="btn small" id="addPackageMeasurement" type="button">+ 添加一件</button>
+    </div>
+    <div class="package-measurements" id="packageMeasurements">
+      ${rows.map((item, index) => packageMeasurementRow(item, index, rows.length)).join("")}
+    </div>
+  </section>`;
+}
+
+function blankPackageMeasurement(index) {
+  return { id: "", label: `第 ${index + 1} 件`, length: "", width: "", height: "", weight: "" };
+}
+
+function packageMeasurementRow(item = {}, index = 0, totalRows = 1) {
+  return `<div class="package-measurement-row" data-package-row data-package-id="${escapeAttr(item.id || "")}">
+    <label><span>件数</span><input class="input package-label" value="${escapeAttr(item.label || `第 ${index + 1} 件`)}"></label>
+    <label><span>长（cm）</span><input class="input package-length" type="number" min="0" step="0.01" value="${Number(item.length || 0) || ""}"></label>
+    <label><span>宽（cm）</span><input class="input package-width" type="number" min="0" step="0.01" value="${Number(item.width || 0) || ""}"></label>
+    <label><span>高（cm）</span><input class="input package-height" type="number" min="0" step="0.01" value="${Number(item.height || 0) || ""}"></label>
+    <label><span>重量（kg）</span><input class="input package-weight" type="number" min="0" step="0.01" value="${Number(item.weight || 0) || ""}"></label>
+    <button class="btn small danger package-remove" type="button" data-remove-package ${totalRows <= 1 ? "disabled" : ""}>删除</button>
+  </div>`;
 }
 
 function purchaseFinanceSummary(po = {}) {
@@ -1946,6 +1978,41 @@ function bindQcFileDeletes(po, factoryMode) {
 
 function bindPoActions(po, factoryMode) {
   $$("[data-chat-po]").forEach((btn) => btn.addEventListener("click", () => renderChatsPage(btn.dataset.chatPo)));
+  const refreshPackageRemoveButtons = () => {
+    const rows = $$("[data-package-row]");
+    rows.forEach((row) => {
+      const btn = $("[data-remove-package]", row);
+      if (btn) btn.disabled = rows.length <= 1;
+    });
+  };
+  const collectPackageMeasurements = () => $$("[data-package-row]").map((row, index) => ({
+    id: row.dataset.packageId || "",
+    label: $(".package-label", row)?.value.trim() || `第 ${index + 1} 件`,
+    length: Number($(".package-length", row)?.value || 0),
+    width: Number($(".package-width", row)?.value || 0),
+    height: Number($(".package-height", row)?.value || 0),
+    weight: Number($(".package-weight", row)?.value || 0)
+  }));
+  $("#addPackageMeasurement")?.addEventListener("click", () => {
+    const list = $("#packageMeasurements");
+    if (!list) return;
+    const rowCount = $$("[data-package-row]", list).length;
+    list.insertAdjacentHTML("beforeend", packageMeasurementRow(blankPackageMeasurement(rowCount), rowCount, rowCount + 1));
+    refreshPackageRemoveButtons();
+  });
+  $("#packageMeasurements")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-package]");
+    if (!button) return;
+    const rows = $$("[data-package-row]");
+    if (rows.length <= 1) return;
+    button.closest("[data-package-row]")?.remove();
+    $$("[data-package-row]").forEach((row, index) => {
+      const label = $(".package-label", row);
+      if (label && /^第 \d+ 件$/.test(label.value.trim())) label.value = `第 ${index + 1} 件`;
+    });
+    refreshPackageRemoveButtons();
+  });
+  refreshPackageRemoveButtons();
   const readPoQuantity = (row) => Number($(".po-edit-qty", row)?.value ?? row.dataset.poQty ?? 0);
   const updateFinanceSummary = () => {
     const total = $$("[data-po-item-id]").reduce((sumValue, row) => {
@@ -2040,7 +2107,8 @@ function bindPoActions(po, factoryMode) {
         factoryConfirmStatus: "Confirmed",
         factoryDeliveryDate: $("#factoryDeliveryDate")?.value || po.factoryDeliveryDate,
         items,
-        note: "页面更新工厂交期、生产状态、付款状态和采购单价"
+        packageMeasurements: collectPackageMeasurements(),
+        note: "页面更新工厂交期、生产状态、付款状态、采购单价和包装尺寸"
       };
       if (canEditPurchasePaymentStatus()) payload.factoryPaymentStatus = $("#factoryPaymentStatus")?.value || po.factoryPaymentStatus;
       await api(`/api/purchase-orders/${po.id}`, {

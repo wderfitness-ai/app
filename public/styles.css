@@ -964,6 +964,37 @@ tr:hover td { background: var(--hover); }
   white-space: nowrap;
 }
 
+.package-measurement-panel {
+  margin-top: 14px;
+}
+
+.package-measurements {
+  display: grid;
+  gap: 10px;
+}
+
+.package-measurement-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) repeat(4, minmax(110px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.package-measurement-row label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.package-measurement-row .btn {
+  min-height: 42px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1411,6 +1442,10 @@ tr:hover td { background: var(--hover); }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .package-measurement-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .table-wrap {
     max-width: calc(100vw - 248px);
   }
@@ -1454,6 +1489,9 @@ tr:hover td { background: var(--hover); }
     padding: 10px;
   }
   .cards, .split, .detail-grid, .form-grid, .qc-upload-grid, .qc-gallery-grid, .finance-card-grid { grid-template-columns: 1fr; }
+  .package-measurement-row {
+    grid-template-columns: 1fr 1fr;
+  }
   .topbar {
     position: relative;
     height: auto;

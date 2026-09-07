@@ -176,6 +176,12 @@ function ensureDbShape(db) {
       changed = true;
     }
   }
+  for (const po of db.purchase_orders || []) {
+    if (!Array.isArray(po.packageMeasurements)) {
+      po.packageMeasurements = [];
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -195,6 +201,27 @@ async function writeDb(db) {
 
 function id(prefix) {
   return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function normalizePackageMeasurements(items = []) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item, index) => {
+    const length = Number(item.length || 0);
+    const width = Number(item.width || 0);
+    const height = Number(item.height || 0);
+    const weight = Number(item.weight || 0);
+    const label = String(item.label || `第 ${index + 1} 件`).trim();
+    return {
+      id: item.id || id("pkg"),
+      label: label || `第 ${index + 1} 件`,
+      length: Number.isFinite(length) ? length : 0,
+      width: Number.isFinite(width) ? width : 0,
+      height: Number.isFinite(height) ? height : 0,
+      weight: Number.isFinite(weight) ? weight : 0,
+      unit: "cm",
+      weightUnit: "kg"
+    };
+  }).filter((item) => item.length || item.width || item.height || item.weight || item.label);
 }
 
 function chinaDateParts(date = new Date()) {
@@ -776,6 +803,7 @@ function visiblePurchaseOrder(db, po, user) {
     salesOrderNumber: salesOrder?.orderNo || "",
     statusZh: STATUS_ZH[po.productionStatus] || po.productionStatus,
     items: poItems(db, po.id),
+    packageMeasurements: Array.isArray(po.packageMeasurements) ? po.packageMeasurements : [],
     purchaseTotalCny: sum(poItems(db, po.id), "purchaseTotal"),
     pendingDeliveryChange: pendingDeliveryChange ? publicDeliveryChangeRequest(db, pendingDeliveryChange) : null,
     qcReports: db.qc_reports.filter((qc) => qc.purchaseOrderId === po.id),
@@ -2917,6 +2945,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         factoryConfirmStatus: body.factoryConfirmStatus || "Pending",
         productionStatus: PURCHASE_PRODUCTION_STATUS.includes(body.productionStatus) ? body.productionStatus : "Factory Order Placed",
         qcStatus: body.qcStatus || "Not Started",
+        packageMeasurements: normalizePackageMeasurements(body.packageMeasurements || []),
         remark: body.remark || "",
         createdAt: now(),
         updatedAt: now()
@@ -3007,6 +3036,9 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
           }
           item.purchaseTotal = purchaseLineTotal(item.freightWeight, unitPrice);
         }
+      }
+      if (Array.isArray(body.packageMeasurements) && (isFactory(user) || [ROLE.ADMIN, ROLE.MERCH, ROLE.FINANCE].includes(user.role))) {
+        po.packageMeasurements = normalizePackageMeasurements(body.packageMeasurements);
       }
       po.updatedAt = now();
       if (body.productionStatus && body.productionStatus !== oldStatus) addTimeline(db, po.id, "purchase_order", user, oldStatus, body.productionStatus, body.note || "生产状态更新");
