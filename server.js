@@ -27,6 +27,7 @@ const CNY_PER_USD = Number(process.env.CNY_PER_USD || 7.2);
 const SESSION_SECRET = process.env.SESSION_SECRET || process.env.BOOTSTRAP_ADMIN_PASSWORD || "local-development-session-secret";
 const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 18_000_000);
 const BLOB_DB_PATH = process.env.BLOB_DB_PATH || "data/trade-order-database.json";
+const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -159,7 +160,9 @@ function emptyDb() {
 
 async function readDb() {
   if (USE_BLOB_DB) {
-    const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false });
+    const blobOptions = { access: "private", useCache: false };
+    if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+    const stored = await blobGet(BLOB_DB_PATH, blobOptions);
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
     ensureDbShape(db);
     return db;
@@ -200,12 +203,14 @@ function ensureDbShape(db) {
 
 async function writeDb(db) {
   if (USE_BLOB_DB) {
-    await blobPut(BLOB_DB_PATH, JSON.stringify(db, null, 2), {
+    const blobOptions = {
       access: "private",
       allowOverwrite: true,
       contentType: "application/json",
       cacheControlMaxAge: 60
-    });
+    };
+    if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+    await blobPut(BLOB_DB_PATH, JSON.stringify(db, null, 2), blobOptions);
     return;
   }
   await mkdir(path.dirname(DATA_FILE), { recursive: true });
