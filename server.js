@@ -29,6 +29,7 @@ const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 18_000_000
 const BLOB_DB_PATH = process.env.BLOB_DB_PATH || "data/trade-order-database.json";
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
+const ALLOW_ORDER_DATA_SHRINK = process.env.ALLOW_ORDER_DATA_SHRINK === "true";
 const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ENMAO_TRACKING_ENDPOINT = "https://vip.yjtms.com:11000/tms-saas-oms/oms/tms/tracequery/out/list";
 const ENMAO_TRACKING_COMPANY_ID = "40";
@@ -213,6 +214,21 @@ async function writeDb(db) {
       cacheControlMaxAge: 60
     };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+    if (!ALLOW_ORDER_DATA_SHRINK) {
+      try {
+        const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false, ...(BLOB_READ_WRITE_TOKEN ? { token: BLOB_READ_WRITE_TOKEN } : {}) });
+        const currentDb = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
+        const currentSales = Array.isArray(currentDb?.sales_orders) ? currentDb.sales_orders.length : 0;
+        const currentPurchase = Array.isArray(currentDb?.purchase_orders) ? currentDb.purchase_orders.length : 0;
+        const nextSales = Array.isArray(db.sales_orders) ? db.sales_orders.length : 0;
+        const nextPurchase = Array.isArray(db.purchase_orders) ? db.purchase_orders.length : 0;
+        if ((currentSales > 0 && nextSales < currentSales) || (currentPurchase > 0 && nextPurchase < currentPurchase)) {
+          throw new Error(`Refusing to shrink order data: sales_orders ${currentSales} -> ${nextSales}, purchase_orders ${currentPurchase} -> ${nextPurchase}`);
+        }
+      } catch (error) {
+        if (String(error?.message || "").startsWith("Refusing to shrink order data")) throw error;
+      }
+    }
     await blobPut(BLOB_DB_PATH, JSON.stringify(db, null, 2), blobOptions);
     return;
   }
