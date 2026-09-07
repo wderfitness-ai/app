@@ -1014,6 +1014,26 @@ function bindLogisticsAssignControls(onDone) {
   }));
 }
 
+function syncAdaptiveTimelines() {
+  $$(".adaptive-timeline-split").forEach((split) => {
+    const leftPanel = split.querySelector(".adaptive-reference-panel");
+    const timelinePanel = split.querySelector(".adaptive-timeline-panel");
+    const timeline = split.querySelector(".timeline-scroll");
+    if (!leftPanel || !timelinePanel || !timeline) return;
+    const viewportLimit = Math.max(280, window.innerHeight - 230);
+    const referenceHeight = Math.max(280, leftPanel.getBoundingClientRect().height);
+    const panelMaxHeight = Math.min(referenceHeight, viewportLimit);
+    timelinePanel.style.setProperty("--timeline-panel-max-height", `${Math.round(panelMaxHeight)}px`);
+    timeline.style.setProperty("--timeline-scroll-max-height", `${Math.max(180, Math.round(panelMaxHeight - 76))}px`);
+  });
+}
+
+function bindAdaptiveTimelines() {
+  syncAdaptiveTimelines();
+  window.removeEventListener("resize", syncAdaptiveTimelines);
+  window.addEventListener("resize", syncAdaptiveTimelines);
+}
+
 function bindLogisticsTrackingButtons(onDone) {
   $$("[data-save-logistics]").forEach((btn) => btn.addEventListener("click", async () => {
     const row = btn.closest("[data-logistics-order]");
@@ -1752,8 +1772,8 @@ async function renderSalesOrderDetail(id) {
       ${order.profit ? `<h2>利润核算</h2><div class="detail-grid">${field("产品销售额（USD）", moneyUsd(order.profit.salesTotal))}${field("DDP运费收入（USD）", moneyUsd(order.profit.ddpFreightRevenue || 0))}${field("销售总额含DDP运费（USD）", moneyUsd(order.profit.grossSalesTotal || order.profit.salesTotal))}${field("采购成本（CNY）", moneyCny(order.profit.purchaseCostCny))}${field("采购折算（USD）", moneyUsd(order.profit.purchaseCost))}${field("预估利润（USD）", moneyUsd(order.profit.estimatedProfit))}${field("利润率", `${order.profit.profitRate}%`)}</div>` : `<p class="notice">当前角色无权查看工厂采购成本和利润。</p>`}
       <h2>产品明细</h2>${simpleTable(order.items, ["productName", "model", "quantity", "salesUnitPrice", "salesTotal", "logoRequirement", "colorRequirement"], ["产品名称（中文 / English）", "型号", "数量", "销售单价（USD）", "销售总价（USD）", "标志要求", "颜色"], (row, key) => ["salesUnitPrice", "salesTotal"].includes(key) ? moneyUsd(row[key]) : displayValue(row[key]))}
     </section>
-    <section class="split">
-      <div class="panel">
+    <section class="split adaptive-timeline-split">
+      <div class="panel adaptive-reference-panel">
         <h2>工厂采购订单</h2>
         <div class="toolbar">
           <select class="select" id="factorySelect">${factories.items.map((f) => `<option value="${f.id}">${f.name}</option>`).join("")}</select>
@@ -1761,9 +1781,9 @@ async function renderSalesOrderDetail(id) {
         </div>
         ${simpleTable(order.purchaseOrders, ["poNo", "factoryName", "productionStatus", "qcStatus", "actions"], ["采购单号", "工厂", "生产状态", "质检", "操作"], (row, key) => key === "actions" ? `<button class="btn small" data-po="${row.id}">查看</button> <button class="btn small" data-chat-po="${row.id}">留言</button>` : displayValue(row[key]))}
       </div>
-      <div class="panel">
+      <div class="panel adaptive-timeline-panel">
         <h2>订单时间线</h2>
-        <div class="timeline">${order.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
+        <div class="timeline timeline-scroll compact-timeline">${order.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
       </div>
     </section>
     ${filePanel(order)}
@@ -1774,6 +1794,7 @@ async function renderSalesOrderDetail(id) {
       <a class="btn" href="/api/export?type=sales-orders">导出客户订单表格</a>
     </section>`);
   bindGoButtons();
+  bindAdaptiveTimelines();
   $("#updateStatus").addEventListener("click", async () => {
     await api(`/api/sales-orders/${order.id}`, { method: "PATCH", body: JSON.stringify({ status: $("#statusSelect").value, note: "页面手动更新" }) });
     renderSalesOrderDetail(order.id);
@@ -1792,6 +1813,7 @@ async function renderPurchaseOrderDetail(id) {
   const po = await api(`/api/purchase-orders/${id}`);
   shell(pageTitle(`工厂订单 ${po.poNo}`, "工厂端只显示生产、质检、包装、发货准备相关信息。", `<button class="btn" data-go="/factory/orders">返回</button>`) + purchaseOrderView(po, true));
   bindGoButtons();
+  bindAdaptiveTimelines();
   bindPoActions(po, true);
 }
 
@@ -1799,6 +1821,7 @@ async function renderPurchaseOrderModal(id) {
   const po = await api(`/api/purchase-orders/${id}`);
   shell(pageTitle(`工厂采购订单 ${po.poNo}`, "采购价和工厂付款仅对授权角色显示；工厂端不会看到客户价格和利润。", `<button class="btn" data-go="/admin/purchase-orders">返回列表</button>`) + purchaseOrderView(po, false));
   bindGoButtons();
+  bindAdaptiveTimelines();
   bindPoActions(po, false);
 }
 
@@ -1838,16 +1861,16 @@ function purchaseOrderView(po, factoryMode) {
       </div>
       <p class="muted">围绕当前采购单与工厂沟通交期、单价、生产、质检、包装和发货问题。</p>
     </section>
-    <section class="split">
-      <div class="panel">
+    <section class="split adaptive-timeline-split">
+      <div class="panel adaptive-reference-panel">
         <h2>质检报告</h2>
         ${simpleTable(po.qcReports || [], ["reportNo", "result", "inspectorName", "inspectionDate", "actions"], ["报告号", "结果", "检查人", "日期", "操作"], (row, key) => key === "actions" ? `<a class="btn small" href="/api/export?type=qc&id=${row.id}">导出 PDF</a>` : displayValue(row[key]))}
         ${qcPhotoPanel(po)}
         ${factoryMode ? "" : `<button class="btn primary" id="createQc">完成质检</button>`}
       </div>
-      <div class="panel">
+      <div class="panel adaptive-timeline-panel">
         <h2>时间线</h2>
-        <div class="timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
+        <div class="timeline timeline-scroll compact-timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
       </div>
     </section>
     ${filePanel(po, true)}
