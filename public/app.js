@@ -1692,7 +1692,6 @@ function purchaseOrderView(po, factoryMode) {
       ${financeColumns ? purchaseItemsEditTable(po.items, factoryMode) : simpleTable(po.items, ["productName", "model", "quantity", "logoRequirement", "packagingRequirement"], ["产品名称（中文 / English）", "型号", "数量", "标志要求", "包装"])}
       ${purchaseFinanceSummary(po)}
     </section>
-    ${packageMeasurementsPanel(po.packageMeasurements || [])}
     <section class="panel" style="margin-top:14px">
       <div class="panel-title-row">
         <h2>订单留言</h2>
@@ -1712,6 +1711,7 @@ function purchaseOrderView(po, factoryMode) {
         <div class="timeline">${po.timeline.map((tl) => `<div class="timeline-item"><strong>${tl.oldStatus ? statusLabel(tl.oldStatus) : "创建"} → ${statusLabel(tl.newStatus)}</strong><span>${tl.actorName} · ${formatChinaDateTime(tl.createdAt)}</span><p>${tl.note || ""}</p></div>`).join("")}</div>
       </div>
     </section>
+    ${packageMeasurementsPanel(po.packageMeasurements || [])}
     ${filePanel(po, true)}
     <section class="panel" style="margin-top:14px">
       <h2>导出</h2>
