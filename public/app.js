@@ -1120,6 +1120,7 @@ function logisticsTrackResult(data = {}) {
   return records.map((record) => {
     const events = Array.isArray(record.events) ? record.events : [];
     const trackingNumber = record.trackingNumber || data.trackingNumber || "-";
+    const copyText = logisticsTrackRecordCopyText(record, data);
     const summaryText = [
       `转单号：${record.transferNumber || "-"}`,
       `客户单号：${record.customerReference || "-"}`,
@@ -1131,7 +1132,7 @@ function logisticsTrackResult(data = {}) {
         <div>
           ${bilingualLine("轨迹详情", "Tracking details", "title")}
         </div>
-        <button class="btn small" data-copy-logistics-track type="button">复制轨迹 / Copy</button>
+        <button class="btn small" data-copy-logistics-track="${escapeAttr(encodeURIComponent(copyText))}" type="button">复制轨迹 / Copy</button>
       </div>
       <div class="logistics-track-summary">
         ${bilingualLine(trackingNumber, `Tracking No.: ${trackingNumber}`, "title")}
@@ -1152,8 +1153,7 @@ function logisticsTrackResult(data = {}) {
 
 function bindLogisticsTrackCopyButtons(root = document) {
   $$("[data-copy-logistics-track]", root).forEach((btn) => btn.addEventListener("click", async () => {
-    const record = btn.closest(".logistics-track-record");
-    const text = logisticsTrackCopyText(record);
+    const text = decodeURIComponent(btn.dataset.copyLogisticsTrack || "");
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -1176,11 +1176,43 @@ function bindLogisticsTrackCopyButtons(root = document) {
   }));
 }
 
-function logisticsTrackCopyText(record) {
-  if (!record) return "";
-  const clone = record.cloneNode(true);
-  $$("[data-copy-logistics-track]", clone).forEach((btn) => btn.remove());
-  return clone.innerText.replace(/\n{3,}/g, "\n\n").trim();
+function logisticsTrackRecordCopyText(record = {}, data = {}) {
+  const trackingNumber = record.trackingNumber || data.trackingNumber || "-";
+  const summaryText = [
+    `转单号：${record.transferNumber || "-"}`,
+    `客户单号：${record.customerReference || "-"}`,
+    `目的地：${record.destination || "-"}`,
+    data.usedCustomerNo ? `已使用客户编号 ${data.usedCustomerNo}` : ""
+  ].filter(Boolean).join(" · ");
+  const lines = [
+    "轨迹详情 / Tracking details",
+    `${trackingNumber}`,
+    `Tracking No.: ${trackingNumber}`,
+    summaryText,
+    translateLogisticsTraceText(summaryText)
+  ];
+  const events = Array.isArray(record.events) ? record.events : [];
+  for (const event of events) {
+    const station = event.station || "-";
+    const remark = event.remark || event.status || "-";
+    lines.push("");
+    lines.push(event.time || "-");
+    if (station && station !== "-") {
+      lines.push(station);
+      const stationEn = translateLogisticsTraceText(station);
+      if (stationEn && stationEn !== station) lines.push(stationEn);
+    }
+    lines.push(remark);
+    const remarkEn = translateLogisticsTraceText(remark);
+    if (remarkEn && remarkEn !== remark) lines.push(remarkEn);
+  }
+  if (!events.length) {
+    const remark = record.latestRemark || "暂无详细轨迹";
+    lines.push("");
+    lines.push(remark);
+    lines.push(translateLogisticsTraceText(remark));
+  }
+  return lines.filter((line) => String(line || "").trim()).join("\n").trim();
 }
 
 function bilingualLine(text = "", englishOverride = "", variant = "") {
@@ -1194,7 +1226,7 @@ function bilingualLine(text = "", englishOverride = "", variant = "") {
 }
 
 function translateLogisticsTraceText(text = "") {
-  let output = String(text || "");
+  let output = normalizeLogisticsTraceText(String(text || ""));
   if (!output || output === "-") return output;
   const plannedWarehouse = output.match(/^计划交仓[，,]\s*当地[：:]\s*(.+)$/);
   if (plannedWarehouse) return `Planned warehouse handover, local date: ${plannedWarehouse[1]}`;
@@ -1224,6 +1256,7 @@ function translateLogisticsTraceText(text = "") {
     [/预计/g, "estimated"],
     [/实际/g, "actual"],
     [/船名\/班列/g, "Vessel/Train"],
+    [/航\/班次/g, "Voyage/Flight No."],
     [/航班次/g, "Voyage/Flight No."],
     [/航线/g, "Service"],
     [/目的港\(站\)/g, "Destination port/station"],
@@ -1247,6 +1280,15 @@ function translateLogisticsTraceText(text = "") {
     output = output.replace(pattern, value);
   });
   return output.replace(/，/g, ", ").replace(/；/g, "; ").replace(/：/g, ": ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeLogisticsTraceText(text = "") {
+  return String(text || "")
+    .replace(/[·•]+/g, "")
+    .replace(/\s*，\s*/g, "，")
+    .replace(/\s*:\s*/g, ":")
+    .replace(/\s*：\s*/g, "：")
+    .trim();
 }
 
 function formatShortMonthDay(month, day) {
