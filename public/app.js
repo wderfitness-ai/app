@@ -225,7 +225,7 @@ async function manualRefresh(button) {
     alert(`刷新失败：${error.message}`);
     if (button) {
       button.disabled = false;
-      button.textContent = "刷新";
+      button.textContent = "手动刷新";
     }
   }
 }
@@ -408,7 +408,6 @@ function shell(content) {
           <div><strong>${state.user.name}</strong><span class="tag blue" style="margin-left:8px">${roleLabel(state.user.role)}</span></div>
           <div class="topbar-actions">
             ${themeControlHtml()}
-            <button class="btn small" id="manualRefreshBtn" type="button">刷新</button>
             <div class="notification-wrap">
               <button class="btn small notification-btn" id="notificationBtn" type="button">通知 <span id="notificationBadge" class="badge hidden">0</span></button>
               <div class="notification-menu hidden" id="notificationMenu">
@@ -420,6 +419,7 @@ function shell(content) {
                 <button class="btn small" id="openNotificationsPage" type="button">查看全部通知</button>
               </div>
             </div>
+            <button class="btn small primary manual-refresh-btn" id="manualRefreshBtn" type="button">手动刷新</button>
             <button class="btn small" id="logoutBtn">退出</button>
           </div>
         </header>
