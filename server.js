@@ -16,6 +16,7 @@ const DATA_FILE = process.env.DATA_FILE || (process.env.VERCEL ? path.join("/tmp
 const PUBLIC_DIR = path.join(__dirname, "public");
 const UPLOAD_DIR = process.env.UPLOAD_DIR || (process.env.VERCEL ? path.join("/tmp", "trade-order-uploads") : path.join(__dirname, "uploads"));
 const FACTORY_LICENSE_DIR = path.join(UPLOAD_DIR, "factory_licenses");
+const LOGISTICS_LICENSE_DIR = path.join(UPLOAD_DIR, "logistics_licenses");
 const PDF_SCRIPT = path.join(__dirname, "scripts", "render-pdf.py");
 const PDF_EXTRACT_SCRIPT = path.join(__dirname, "scripts", "extract-order-pdf.py");
 const LOGO_PATH = path.join(PUBLIC_DIR, "assets", "wder-logo.jpg");
@@ -40,7 +41,8 @@ const ROLE = {
   SALES: "Sales",
   MERCH: "Merchandiser",
   FINANCE: "Finance",
-  FACTORY: "Factory"
+  FACTORY: "Factory",
+  LOGISTICS: "Logistics"
 };
 
 const BOOTSTRAP_ADMIN = {
@@ -136,6 +138,7 @@ function emptyDb() {
     roles: Object.values(ROLE).map((name, index) => ({ id: `role-${index + 1}`, name })),
     customers: [],
     factories: [],
+    logistics_companies: [],
     products: [],
     sales_orders: [],
     sales_order_items: [],
@@ -179,6 +182,16 @@ function ensureDbShape(db) {
   for (const po of db.purchase_orders || []) {
     if (!Array.isArray(po.packageMeasurements)) {
       po.packageMeasurements = [];
+      changed = true;
+    }
+  }
+  for (const order of db.sales_orders || []) {
+    if (!("logisticsTrackingNumber" in order)) {
+      order.logisticsTrackingNumber = "";
+      changed = true;
+    }
+    if (!("logisticsCompanyId" in order)) {
+      order.logisticsCompanyId = "";
       changed = true;
     }
   }
@@ -330,6 +343,10 @@ function canEditPurchasePayment(user) {
 
 function isFactory(user) {
   return user?.role === ROLE.FACTORY;
+}
+
+function isLogistics(user) {
+  return user?.role === ROLE.LOGISTICS;
 }
 
 function isApprovedUser(user) {
@@ -496,9 +513,33 @@ function visibleSalesOrdersForUser(db, user) {
   return db.sales_orders.filter((so) => !isDeleted(so) && (user.role !== ROLE.SALES || so.salesId === user.id));
 }
 
+function visibleLogisticsOrders(db, user) {
+  if (![ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS].includes(user?.role)) return [];
+  return db.sales_orders
+    .filter((order) => !isDeleted(order))
+    .map((order) => {
+      const customer = db.customers.find((item) => item.id === order.customerId);
+      const company = db.logistics_companies?.find((item) => item.id === order.logisticsCompanyId);
+      return {
+        id: order.id,
+        orderNo: order.orderNo || "",
+        customerName: customer?.name || customer?.company || "",
+        customerCompany: customer?.company || "",
+        address: order.destinationAddress || customer?.address || "",
+        logisticsTrackingNumber: order.logisticsTrackingNumber || "",
+        logisticsCompanyId: order.logisticsCompanyId || "",
+        logisticsCompanyName: company?.name || "",
+        expectedDeliveryDate: order.expectedDeliveryDate || "",
+        status: order.status || "",
+        updatedAt: order.updatedAt || ""
+      };
+    });
+}
+
 function visiblePurchaseOrdersForUser(db, user) {
   return db.purchase_orders.filter((po) => {
     if (isDeleted(po)) return false;
+    if (isLogistics(user)) return false;
     if (isFactory(user)) return po.factoryId === user.factoryId;
     if (user.role === ROLE.SALES) return visibleSalesOrdersForUser(db, user).some((so) => so.id === po.salesOrderId);
     return true;
@@ -2243,12 +2284,13 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     const email = String(body.email || "").trim().toLowerCase();
     const name = String(body.name || "").trim();
     const password = String(body.password || "");
-    const allowedRoles = [ROLE.SALES, ROLE.FACTORY];
+    const allowedRoles = [ROLE.SALES, ROLE.FACTORY, ROLE.LOGISTICS];
     const role = allowedRoles.includes(body.role) ? body.role : ROLE.SALES;
     if (!name || !email || !password) return json(res, 400, { error: "请填写用户名、注册邮箱和注册密码" });
     if (password.length < 6) return json(res, 400, { error: "注册密码至少需要 6 位" });
     if (db.users.some((u) => u.email.toLowerCase() === email)) return json(res, 409, { error: "该邮箱已经注册，请等待审核或直接登录" });
     let factoryId = "";
+    let logisticsCompanyId = "";
     let businessLicenseFileName = "";
     let businessLicensePath = "";
     if (role === ROLE.FACTORY) {
@@ -2289,6 +2331,39 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         factoryId = factory.id;
       }
     }
+    if (role === ROLE.LOGISTICS) {
+      if (!body.businessLicenseBase64 || !body.businessLicenseFileName) return json(res, 400, { error: "物流账号注册必须上传营业执照照片" });
+      await mkdir(LOGISTICS_LICENSE_DIR, { recursive: true });
+      businessLicenseFileName = String(body.businessLicenseFileName).replace(/[^\w.\- \u4e00-\u9fa5]/g, "_");
+      businessLicensePath = path.join(LOGISTICS_LICENSE_DIR, `${Date.now()}_${businessLicenseFileName}`);
+      await writeFile(businessLicensePath, decodeBase64Payload(body.businessLicenseBase64));
+      logisticsCompanyId = String(body.logisticsCompanyId || "");
+      if (logisticsCompanyId && !db.logistics_companies.some((company) => company.id === logisticsCompanyId)) return json(res, 400, { error: "物流账号必须绑定有效物流公司" });
+      if (!logisticsCompanyId) {
+        const companyName = String(body.logisticsCompanyName || "").trim();
+        const companyContact = String(body.logisticsCompanyContact || name).trim();
+        const companyPhone = String(body.logisticsCompanyPhone || "").trim();
+        if (!companyName || !companyContact || !companyPhone) return json(res, 400, { error: "物流公司名称、联系人和联系电话不能为空" });
+        const company = {
+          id: id("log"),
+          name: companyName,
+          contact: companyContact,
+          phone: companyPhone,
+          wechat: String(body.logisticsCompanyWechat || "").trim(),
+          email,
+          address: String(body.logisticsCompanyAddress || "").trim(),
+          mainRoutes: String(body.logisticsCompanyRoutes || "").trim(),
+          businessLicenseFileName,
+          businessLicensePath,
+          remark: "物流账号注册时创建",
+          enabled: false,
+          createdAt: now(),
+          updatedAt: now()
+        };
+        db.logistics_companies.push(company);
+        logisticsCompanyId = company.id;
+      }
+    }
     const created = {
       id: id("user"),
       name,
@@ -2296,6 +2371,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       password,
       role,
       factoryId,
+      logisticsCompanyId,
       approvalStatus: "pending",
       approvedBy: "",
       approvedAt: "",
@@ -2315,7 +2391,15 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     return json(res, 200, { ok: true }, { "set-cookie": "session=; Path=/; Max-Age=0" });
   }
 
-  if (resource === "session" && method === "GET") return json(res, 200, { user: user ? publicUser(user) : null, orderStatuses: ORDER_STATUS, purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })) });
+  if (resource === "session" && method === "GET") return json(res, 200, {
+    user: user ? publicUser(user) : null,
+    orderStatuses: ORDER_STATUS,
+    purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS,
+    statusZh: STATUS_ZH,
+    roles: Object.values(ROLE),
+    factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })),
+    logisticsCompanies: (db.logistics_companies || []).map((company) => ({ id: company.id, name: company.name }))
+  });
   if (!requireAuth(user, res)) return;
 
   if (resource === "notifications") {
@@ -2567,7 +2651,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         .map((item) => ({
           ...publicUser(item),
           approvalStatus: item.approvalStatus || "approved",
-          factoryName: db.factories.find((factory) => factory.id === item.factoryId)?.name || ""
+          factoryName: db.factories.find((factory) => factory.id === item.factoryId)?.name || "",
+          logisticsCompanyName: db.logistics_companies.find((company) => company.id === item.logisticsCompanyId)?.name || ""
         }));
       return json(res, 200, { items: users, total: users.length });
     }
@@ -2596,6 +2681,13 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
           if (factory) {
             factory.enabled = true;
             factory.updatedAt = now();
+          }
+        }
+        if (target.role === ROLE.LOGISTICS && target.logisticsCompanyId) {
+          const company = db.logistics_companies.find((item) => item.id === target.logisticsCompanyId);
+          if (company) {
+            company.enabled = true;
+            company.updatedAt = now();
           }
         }
       } else if (body.approvalStatus === "rejected") {
@@ -2741,6 +2833,43 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     });
   }
 
+  if (resource === "logistics-orders") {
+    if (method === "GET") {
+      if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
+      const query = listQuery(url);
+      const rows = filterGeneric(visibleLogisticsOrders(db, user), query, ["orderNo", "customerName", "customerCompany", "address", "logisticsTrackingNumber"], "expectedDeliveryDate");
+      return json(res, 200, paginate(rows, query));
+    }
+    if (method === "PATCH" && resourceId) {
+      if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
+      const order = db.sales_orders.find((item) => item.id === resourceId);
+      if (!order || isDeleted(order)) return json(res, 404, { error: "Order not found" });
+      const body = await bodyJson(req);
+      const before = { ...order };
+      const trackingNumber = String(body.logisticsTrackingNumber || "").trim();
+      if (!trackingNumber) return json(res, 400, { error: "请填写国际物流单号" });
+      order.logisticsTrackingNumber = trackingNumber;
+      if (isLogistics(user) && user.logisticsCompanyId) order.logisticsCompanyId = user.logisticsCompanyId;
+      if (!isLogistics(user) && "logisticsCompanyId" in body) order.logisticsCompanyId = String(body.logisticsCompanyId || "");
+      order.updatedAt = now();
+      addTimeline(db, order.id, "sales_order", user, before.logisticsTrackingNumber || "", trackingNumber, "更新国际物流单号");
+      audit(db, user, "sales_order", order.id, "update_logistics_tracking", before, order);
+      notify(db, {
+        actor: user,
+        title: "国际物流单号已更新",
+        message: `订单 ${order.orderNo} 已填写国际物流单号：${trackingNumber}。`,
+        entityType: "sales_order",
+        entityId: order.id,
+        orderNo: order.orderNo,
+        roles: [ROLE.ADMIN, ROLE.SALES, ROLE.MERCH],
+        userIds: order.salesId ? [order.salesId] : [],
+        severity: "info"
+      });
+      await writeDb(db);
+      return json(res, 200, visibleLogisticsOrders(db, user).find((item) => item.id === order.id));
+    }
+  }
+
   if (resource === "import-sales-order" && method === "POST") {
     if (!requireRole(user, res, [ROLE.ADMIN, ROLE.SALES])) return;
     const body = await bodyJson(req);
@@ -2768,6 +2897,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       orderNo: preferredOrderNo,
       customerId: customer.id,
       salesId: user.id,
+      logisticsTrackingNumber: "",
+      logisticsCompanyId: "",
       createdAt: now(),
       updatedAt: now()
     };
@@ -2868,6 +2999,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         paymentStatus: body.paymentStatus || "Deposit Pending",
         status: body.status || "Inquiry Received",
         expectedDeliveryDate: body.expectedDeliveryDate || today(30),
+        logisticsTrackingNumber: "",
+        logisticsCompanyId: "",
         remark: body.remark || "",
         createdAt: now(),
         updatedAt: now()
@@ -3465,7 +3598,7 @@ async function appHandler(req, res) {
     if (url.pathname === "/api/session" && req.method === "GET") {
       const userId = verifySessionToken(parseCookies(req).session);
       if (userId === BOOTSTRAP_ADMIN.id && BOOTSTRAP_ADMIN.password) {
-        return json(res, 200, { user: publicUser(virtualBootstrapAdmin()), orderStatuses: ORDER_STATUS, purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: [] });
+        return json(res, 200, { user: publicUser(virtualBootstrapAdmin()), orderStatuses: ORDER_STATUS, purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: [], logisticsCompanies: [] });
       }
     }
     const db = await readDb();

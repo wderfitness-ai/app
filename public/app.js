@@ -8,6 +8,7 @@ const state = {
   statusZh: {},
   roles: [],
   factories: [],
+  logisticsCompanies: [],
   notifications: { items: [], unread: 0 },
   navSummary: { deliveryDueTodayCount: 0, unreadNotifications: 0, unreadChats: 0, deliveryDueToday: [], notifications: [] },
   cache: {},
@@ -29,6 +30,7 @@ const navAdmin = [
   ["/admin/products", "产品管理"],
   ["/admin/qc", "质检管理"],
   ["/admin/payments", "付款管理"],
+  ["/admin/logistics", "物流管理"],
   ["/admin/reports", "报表导出"],
   ["/admin/settings", "设置与审计"]
 ];
@@ -41,12 +43,18 @@ const navFactory = [
   ["/factory/orders", "我的采购订单"]
 ];
 
+const navLogistics = [
+  ["/logistics/orders", "物流管理"],
+  ["/logistics/notifications", "通知中心"]
+];
+
 const ROLE_LABELS = {
   Admin: "管理员",
   Sales: "销售",
   Merchandiser: "跟单",
   Finance: "财务",
-  Factory: "工厂账号"
+  Factory: "工厂账号",
+  Logistics: "物流账号"
 };
 
 const STATUS_LABELS = {
@@ -250,6 +258,7 @@ async function boot() {
     state.statusZh = session.statusZh || {};
     state.roles = session.roles || [];
     state.factories = session.factories || [];
+    state.logisticsCompanies = session.logisticsCompanies || [];
     render();
   } catch {
     renderLogin();
@@ -258,7 +267,11 @@ async function boot() {
 
 function pathNow() {
   const path = window.location.pathname;
-  if (path === "/") return state.user?.role === "Factory" ? "/factory/dashboard" : "/admin/dashboard";
+  if (path === "/") {
+    if (state.user?.role === "Factory") return "/factory/dashboard";
+    if (state.user?.role === "Logistics") return "/logistics/orders";
+    return "/admin/dashboard";
+  }
   return path;
 }
 
@@ -299,7 +312,7 @@ function renderLogin() {
           <label>注册密码<input class="input" name="registerPassword" value="" type="password" autocomplete="new-password"></label>
           <div style="height:10px"></div>
           <label>申请账号类型<select class="select" name="role" id="roleSelect">
-            ${["Sales", "Factory"].map((role) => `<option value="${role}">${role === "Sales" ? "公司销售" : "工厂账号"}</option>`).join("")}
+            ${["Sales", "Factory", "Logistics"].map((role) => `<option value="${role}">${roleLabel(role)}</option>`).join("")}
           </select></label>
           <div style="height:10px"></div>
           <div id="factoryBind" class="hidden">
@@ -322,6 +335,27 @@ function renderLogin() {
             <div style="height:10px"></div>
             <label>营业执照照片<input class="input" type="file" name="businessLicense" id="businessLicense" accept="image/*,.pdf"></label>
             <p class="muted" style="margin:6px 0 0">手机照片会自动压缩后上传；PDF 建议小于 4MB。</p>
+          </div>
+          <div id="logisticsBind" class="hidden">
+            <label>绑定已有物流公司<select class="select" name="logisticsCompanyId">
+              <option value="">注册新物流公司资料</option>
+              ${(state.logisticsCompanies || []).map((company) => `<option value="${company.id}">${company.name}</option>`).join("")}
+            </select></label>
+            <div style="height:10px"></div>
+            <label>物流公司名称<input class="input" name="logisticsCompanyName" placeholder="例如：某某国际物流"></label>
+            <div style="height:10px"></div>
+            <label>物流联系人<input class="input" name="logisticsCompanyContact" placeholder="联系人"></label>
+            <div style="height:10px"></div>
+            <label>物流联系电话<input class="input" name="logisticsCompanyPhone" placeholder="手机号或座机"></label>
+            <div style="height:10px"></div>
+            <label>物流微信<input class="input" name="logisticsCompanyWechat" placeholder="微信号"></label>
+            <div style="height:10px"></div>
+            <label>物流公司地址<input class="input" name="logisticsCompanyAddress" placeholder="详细地址"></label>
+            <div style="height:10px"></div>
+            <label>主营线路<input class="input" name="logisticsCompanyRoutes" placeholder="例如：美国、加拿大、欧洲"></label>
+            <div style="height:10px"></div>
+            <label>营业执照照片<input class="input" type="file" name="logisticsBusinessLicense" id="logisticsBusinessLicense" accept="image/*,.pdf"></label>
+            <p class="muted" style="margin:6px 0 0">物流账号注册要求与工厂账号一致，需要上传营业执照并等待管理员审核。</p>
           </div>
         </div>
         <div style="height:14px"></div>
@@ -348,6 +382,7 @@ function renderLogin() {
   });
   $("#roleSelect").addEventListener("change", () => {
     $("#factoryBind").classList.toggle("hidden", $("#roleSelect").value !== "Factory");
+    $("#logisticsBind").classList.toggle("hidden", $("#roleSelect").value !== "Logistics");
   });
   $("#loginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -356,10 +391,10 @@ function renderLogin() {
       if (mode === "login") {
         const data = await api("/api/login", { method: "POST", body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }) });
         state.user = data.user;
-        go(state.user.role === "Factory" ? "/factory/dashboard" : "/admin/dashboard");
+        go(state.user.role === "Factory" ? "/factory/dashboard" : state.user.role === "Logistics" ? "/logistics/orders" : "/admin/dashboard");
         return;
       }
-      const licenseFile = $("#businessLicense")?.files?.[0];
+      const licenseFile = $("#roleSelect")?.value === "Logistics" ? $("#logisticsBusinessLicense")?.files?.[0] : $("#businessLicense")?.files?.[0];
       const businessLicenseBase64 = licenseFile ? await fileToUploadBase64(licenseFile, { compressImages: true, maxRawBytes: 4_000_000 }) : "";
       const data = await api("/api/register", { method: "POST", body: JSON.stringify({
           name: fd.get("name"),
@@ -373,6 +408,13 @@ function renderLogin() {
           factoryWechat: fd.get("factoryWechat"),
           factoryAddress: fd.get("factoryAddress"),
           factoryMainProducts: fd.get("factoryMainProducts"),
+          logisticsCompanyId: fd.get("logisticsCompanyId"),
+          logisticsCompanyName: fd.get("logisticsCompanyName"),
+          logisticsCompanyContact: fd.get("logisticsCompanyContact"),
+          logisticsCompanyPhone: fd.get("logisticsCompanyPhone"),
+          logisticsCompanyWechat: fd.get("logisticsCompanyWechat"),
+          logisticsCompanyAddress: fd.get("logisticsCompanyAddress"),
+          logisticsCompanyRoutes: fd.get("logisticsCompanyRoutes"),
           businessLicenseFileName: licenseFile?.name || "",
           businessLicenseBase64
         }) });
@@ -386,7 +428,8 @@ function renderLogin() {
 
 function shell(content) {
   const isFactory = state.user.role === "Factory";
-  const nav = isFactory ? navFactory : navAdmin;
+  const isLogisticsUser = state.user.role === "Logistics";
+  const nav = isFactory ? navFactory : isLogisticsUser ? navLogistics : navAdmin;
   $("#app").innerHTML = `
     <div class="shell ${isFactory ? "factory-shell" : ""}">
       <aside class="sidebar">
@@ -394,7 +437,7 @@ function shell(content) {
           <div class="brand-logo-box"><img src="/assets/wder-logo.jpg" alt="WDER Fitness Equipment"></div>
           <div><strong>跟单管理系统</strong><span>订单与工厂生产管理</span></div>
         </div>
-        <div class="nav-section">${isFactory ? "工厂端" : "管理后台"}</div>
+        <div class="nav-section">${isFactory ? "工厂端" : isLogisticsUser ? "物流端" : "管理后台"}</div>
         <button class="sidebar-refresh-btn" type="button" data-manual-refresh data-refresh-label="刷新当前页面">刷新当前页面</button>
         ${nav.map(([href, label]) => navLinkHtml(href, label)).join("")}
         ${isFactory ? `
@@ -611,14 +654,17 @@ async function render() {
     state.statusZh = session.statusZh || {};
     state.roles = session.roles || [];
     state.factories = session.factories || [];
+    state.logisticsCompanies = session.logisticsCompanies || [];
     if (!state.user) return renderLogin();
   }
   const path = pathNow();
   if (state.user.role === "Factory" && !path.startsWith("/factory")) return go("/factory/dashboard");
+  if (state.user.role === "Logistics" && !path.startsWith("/logistics")) return go("/logistics/orders");
   if (path === "/admin/dashboard" || path === "/factory/dashboard") return renderDashboard();
-  if (path === "/admin/notifications" || path === "/factory/notifications") return renderNotificationsPage();
+  if (path === "/admin/notifications" || path === "/factory/notifications" || path === "/logistics/notifications") return renderNotificationsPage();
   if (path === "/admin/chats" || path === "/factory/chats") return renderChatsPage();
   if (path === "/admin/delivery" || path === "/factory/delivery") return renderDeliveryManagement();
+  if (path === "/admin/logistics" || path === "/logistics/orders") return renderLogisticsOrders();
   if (path === "/admin/orders" || path === "/admin/sales-orders") return renderSalesOrders();
   if (path === "/admin/orders/new") return renderNewSalesOrder();
   if (path.startsWith("/admin/orders/")) return renderSalesOrderDetail(path.split("/").pop());
@@ -633,7 +679,7 @@ async function render() {
   if (path === "/admin/payments") return renderPayments();
   if (path === "/admin/reports") return renderReports();
   if (path === "/admin/settings") return renderSettings();
-  return go(state.user.role === "Factory" ? "/factory/dashboard" : "/admin/dashboard");
+  return go(state.user.role === "Factory" ? "/factory/dashboard" : state.user.role === "Logistics" ? "/logistics/orders" : "/admin/dashboard");
 }
 
 async function renderDashboard() {
@@ -893,6 +939,74 @@ async function loadPurchaseOrders() {
   }));
   $$("[data-chat-po]").forEach((btn) => btn.addEventListener("click", () => renderChatsPage(btn.dataset.chatPo)));
   bindPurchaseOrderDeleteButtons();
+}
+
+async function renderLogisticsOrders() {
+  const logisticsMode = state.user.role === "Logistics";
+  shell(pageTitle("物流管理", logisticsMode ? "填写客户订单的国际物流单号。" : "查看客户订单地址，并维护国际物流单号。") + `
+    <section class="panel">
+      <div class="toolbar">
+        <div class="filters">
+          <input class="input" id="logisticsSearch" placeholder="搜索订单号、客户、地址、物流单号">
+          <select class="select" id="logisticsSort">
+            <option value="expectedDeliveryDate">按交期</option>
+            <option value="orderNo">按订单号</option>
+            <option value="customerName">按客户</option>
+          </select>
+        </div>
+        <button class="btn" id="refreshLogisticsOrders" type="button">刷新</button>
+      </div>
+      <div id="logisticsOrdersList">加载中...</div>
+    </section>`);
+  const load = async () => {
+    const params = new URLSearchParams({
+      q: $("#logisticsSearch")?.value || "",
+      sort: $("#logisticsSort")?.value || "expectedDeliveryDate",
+      dir: "asc",
+      pageSize: "100"
+    });
+    const data = await api(`/api/logistics-orders?${params}`);
+    $("#logisticsOrdersList").innerHTML = logisticsOrdersTable(data.items || []);
+    bindLogisticsTrackingButtons(load);
+  };
+  $("#logisticsSearch")?.addEventListener("input", debounce(load, 250));
+  $("#logisticsSort")?.addEventListener("change", load);
+  $("#refreshLogisticsOrders")?.addEventListener("click", load);
+  await load();
+}
+
+function logisticsOrdersTable(rows = []) {
+  if (!rows.length) return `<p class="muted">暂无订单</p>`;
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>订单号</th><th>客户名字</th><th>地址</th><th>预计交期</th><th>物流单号</th><th>操作</th></tr></thead>
+    <tbody>${rows.map((row) => `<tr data-logistics-order="${row.id}">
+      <td><strong>${displayValue(row.orderNo)}</strong></td>
+      <td>${displayValue(row.customerName || row.customerCompany)}</td>
+      <td>${displayValue(row.address)}</td>
+      <td>${displayValue(row.expectedDeliveryDate)}</td>
+      <td><input class="input logistics-tracking-input" value="${escapeAttr(row.logisticsTrackingNumber || "")}" placeholder="填写国际物流单号"></td>
+      <td><button class="btn small primary" data-save-logistics="${row.id}" type="button">保存单号</button></td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+function bindLogisticsTrackingButtons(onDone) {
+  $$("[data-save-logistics]").forEach((btn) => btn.addEventListener("click", async () => {
+    const row = btn.closest("[data-logistics-order]");
+    const trackingNumber = $(".logistics-tracking-input", row)?.value.trim() || "";
+    if (!trackingNumber) return alert("请填写国际物流单号");
+    btn.disabled = true;
+    try {
+      await api(`/api/logistics-orders/${btn.dataset.saveLogistics}`, {
+        method: "PATCH",
+        body: JSON.stringify({ logisticsTrackingNumber: trackingNumber })
+      });
+      await onDone();
+    } catch (error) {
+      alert(error.message || "保存失败");
+      btn.disabled = false;
+    }
+  }));
 }
 
 async function renderChatsPage(selectedPurchaseOrderId = "") {
@@ -2400,14 +2514,16 @@ async function renderSettings() {
       <div id="auditList"></div>
     </section>`);
   const [logs, pending, users] = await Promise.all([api("/api/audit-logs"), api("/api/users?status=pending"), api("/api/users")]);
-  $("#userApprovalList").innerHTML = simpleTable(pending.items, ["name", "email", "role", "factoryName", "businessLicenseFileName", "createdAt", "actions"], ["用户名", "邮箱", "类型", "工厂", "营业执照", "申请时间", "操作"], (row, key) => {
+  $("#userApprovalList").innerHTML = simpleTable(pending.items, ["name", "email", "role", "accountCompanyName", "businessLicenseFileName", "createdAt", "actions"], ["用户名", "邮箱", "类型", "关联公司", "营业执照", "申请时间", "操作"], (row, key) => {
     if (key === "role") return roleLabel(row.role);
+    if (key === "accountCompanyName") return displayValue(row.factoryName || row.logisticsCompanyName || "");
     if (key === "actions") return `<button class="btn small primary" data-approve-user="${row.id}">通过</button> <button class="btn small danger" data-reject-user="${row.id}">拒绝</button>`;
     return displayValue(row[key]);
   });
-  $("#userAccountList").innerHTML = simpleTable(users.items, ["name", "email", "role", "approvalStatus", "factoryName", "actions"], ["用户名", "邮箱", "类型", "审核状态", "工厂", "操作"], (row, key) => {
+  $("#userAccountList").innerHTML = simpleTable(users.items, ["name", "email", "role", "approvalStatus", "accountCompanyName", "actions"], ["用户名", "邮箱", "类型", "审核状态", "关联公司", "操作"], (row, key) => {
     if (key === "role") return roleLabel(row.role);
     if (key === "approvalStatus") return tag(statusLabel(row.approvalStatus), row.approvalStatus);
+    if (key === "accountCompanyName") return displayValue(row.factoryName || row.logisticsCompanyName || "");
     if (key === "actions") return `<button class="btn small" data-reset-password="${row.id}" data-reset-email="${escapeAttr(row.email)}">重置密码</button> <button class="btn small danger" data-delete-user="${row.id}" data-delete-email="${escapeAttr(row.email)}">删除账号</button>`;
     return displayValue(row[key]);
   });
@@ -2441,7 +2557,8 @@ function permissionMatrix() {
     { role: "Sales", scope: "只能查看和管理自己提交的客户订单；可以查看全部工厂列表；无采购价和利润" },
     { role: "Merchandiser", scope: "订单/采购单进度、质检、文件；不能修改核心财务字段" },
     { role: "Finance", scope: "收付款、成本、利润、财务报表" },
-    { role: "Factory", scope: "仅自己的采购订单；可提交交期和人民币采购单价；无客户联系方式、客户售价、利润" }
+    { role: "Factory", scope: "仅自己的采购订单；可提交交期和人民币采购单价；无客户联系方式、客户售价、利润" },
+    { role: "Logistics", scope: "仅物流管理；可查看订单号、客户名字、地址并填写国际物流单号" }
   ];
   return simpleTable(rows, ["role", "scope"], ["角色", "权限"]);
 }
