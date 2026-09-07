@@ -30,6 +30,9 @@ const BLOB_DB_PATH = process.env.BLOB_DB_PATH || "data/trade-order-database.json
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
+const ENMAO_TRACKING_ENDPOINT = "https://vip.yjtms.com:11000/tms-saas-oms/oms/tms/tracequery/out/list";
+const ENMAO_TRACKING_COMPANY_ID = "40";
+const ENMAO_TRACKING_CUSTOMER_NO = "92356";
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -553,6 +556,94 @@ function visiblePurchaseOrdersForUser(db, user) {
     if (user.role === ROLE.SALES) return visibleSalesOrdersForUser(db, user).some((so) => so.id === po.salesOrderId);
     return true;
   });
+}
+
+function canAccessLogisticsOrder(db, order, user) {
+  if (!order || isDeleted(order) || !user) return false;
+  if (![ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS].includes(user.role)) return false;
+  if (isLogistics(user)) return Boolean(user.logisticsCompanyId) && order.logisticsCompanyId === user.logisticsCompanyId;
+  return true;
+}
+
+function externalTraceRemark(scan = {}) {
+  if (scan.scanCode === "DF") return `快件已离开【${scan.scanStation || "-"}】，下一网点是【${scan.ctrStation || "-"}】，转运单号【${scan.scanno || "-"}】`;
+  if (scan.scanCode === "AF") return `快件到达【${scan.scanStation || "-"}】，上一网点是【${scan.ctrStation || "-"}】，转运单号【${scan.scanno || "-"}】`;
+  if (scan.scanCode === "DA") return `快件已由【${scan.scanStation || "-"}】发出`;
+  if (scan.scanCode === "PK") return `【${scan.scanStation || "-"}】已取到快件`;
+  if (scan.scanCode === "PU") return `【${scan.scanStation || "-"}】已收到快件`;
+  if (scan.scanCode === "TN") return `转【${scan.scanno || "-"}】`;
+  if (scan.scanCode === "BC") return `【${scan.scanStation || "-"}】已做班次交接扫描，交接单号【${scan.scanno || "-"}】`;
+  if (["ST", "SJ", "JS", "JSC", "RR", "RS", "RTR", "RTC"].includes(scan.scanCode)) return scan.scanStatus || scan.remark || "";
+  if (scan.scanCode === "RRD") return `${scan.scanStatus || ""}${scan.scanno ? `【${scan.scanno}】` : ""}`;
+  if (scan.scanCode === "RT") return scan.scanno ? `退返客户,退返方式为<${scan.remark || ""}>;<${scan.scanno}>` : `退返客户,退返方式为<${scan.remark || ""}>;`;
+  return scan.remark || scan.scanStatus || "";
+}
+
+function normalizeExternalTraceRecord(record = {}) {
+  const events = Array.isArray(record.podInfoDTOList) ? record.podInfoDTOList.map((scan) => ({
+    time: scan.scanTime || "",
+    station: scan.scanStation || "",
+    status: scan.scanStatus || "",
+    remark: externalTraceRemark(scan),
+    scanCode: scan.scanCode || ""
+  })) : [];
+  return {
+    trackingNumber: record.jobno || "",
+    transferNumber: record.refno || "",
+    fbaNumber: record.fbano || "",
+    customerReference: record.referenceno || "",
+    destination: record.destName || "",
+    latestTime: record.scanTime || events[0]?.time || "",
+    latestStation: record.scanStation || events[0]?.station || "",
+    latestRemark: record.remarkShow || record.remark || events[0]?.remark || "",
+    events
+  };
+}
+
+async function queryEnmaoTrackingOnce(trackingNumber, customerNo = "") {
+  const params = new URLSearchParams({
+    noList: trackingNumber,
+    queryType: "99",
+    companyId: ENMAO_TRACKING_COMPANY_ID
+  });
+  if (customerNo) params.set("custNo", customerNo);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(`${ENMAO_TRACKING_ENDPOINT}?${params}`, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        "user-agent": "WdeFitness/1.0 logistics-tracking"
+      }
+    });
+    const textBody = await response.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(textBody);
+    } catch {
+      payload = { message: textBody || "物流接口返回非 JSON 数据", result_code: response.status };
+    }
+    return { response, payload, customerNo };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function queryEnmaoTracking(trackingNumber) {
+  const first = await queryEnmaoTrackingOnce(trackingNumber);
+  const firstBody = Array.isArray(first.payload?.body) ? first.payload.body : Array.isArray(first.payload) ? first.payload : [];
+  const needsCustomerNo = first.payload?.result_code !== 0 || /客户不存在|客户编码|客户编号/.test(`${first.payload?.message || ""}${first.payload?.solution || ""}`);
+  const result = firstBody.length || !needsCustomerNo ? first : await queryEnmaoTrackingOnce(trackingNumber, ENMAO_TRACKING_CUSTOMER_NO);
+  const rawBody = Array.isArray(result.payload?.body) ? result.payload.body : Array.isArray(result.payload) ? result.payload : [];
+  return {
+    source: "上海恩贸国际货物运输代理有限公司",
+    usedCustomerNo: result.customerNo || "",
+    resultCode: result.payload?.result_code ?? result.response?.status ?? 0,
+    message: result.payload?.message || result.payload?.solution || "",
+    records: rawBody.map(normalizeExternalTraceRecord)
+  };
 }
 
 function activeDeliveryPurchaseOrders(db, user) {
@@ -2843,6 +2934,25 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
   }
 
   if (resource === "logistics-orders") {
+    if (method === "GET" && resourceId && action === "track") {
+      if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
+      const order = db.sales_orders.find((item) => item.id === resourceId);
+      if (!order || isDeleted(order)) return json(res, 404, { error: "Order not found" });
+      if (!canAccessLogisticsOrder(db, order, user)) return json(res, 403, { error: "物流账号只能查询已分配给本公司的订单" });
+      const trackingNumber = String(url.searchParams.get("trackingNumber") || order.logisticsTrackingNumber || "").trim();
+      if (!trackingNumber) return json(res, 400, { error: "请先填写国际物流单号" });
+      try {
+        const tracking = await queryEnmaoTracking(trackingNumber);
+        return json(res, 200, {
+          orderId: order.id,
+          orderNo: order.orderNo || "",
+          trackingNumber,
+          ...tracking
+        });
+      } catch (error) {
+        return json(res, 502, { error: "物流轨迹查询失败，请稍后重试", detail: error?.message || "" });
+      }
+    }
     if (method === "GET") {
       if (!requireRole(user, res, [ROLE.ADMIN, ROLE.MERCH, ROLE.LOGISTICS])) return;
       const query = listQuery(url);

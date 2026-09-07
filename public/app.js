@@ -968,6 +968,7 @@ async function renderLogisticsOrders() {
     const data = await api(`/api/logistics-orders?${params}`);
     $("#logisticsOrdersList").innerHTML = logisticsOrdersTable(data.items || [], data.logisticsCompanies || []);
     bindLogisticsTrackingButtons(load);
+    bindLogisticsTrackButtons();
     bindLogisticsAssignControls(load);
   };
   $("#logisticsSearch")?.addEventListener("input", debounce(load, 250));
@@ -979,6 +980,7 @@ async function renderLogisticsOrders() {
 function logisticsOrdersTable(rows = [], logisticsCompanies = []) {
   if (!rows.length) return `<p class="muted">暂无订单</p>`;
   const canAssignLogistics = ["Admin", "Merchandiser"].includes(state.user.role);
+  const colSpan = canAssignLogistics ? 7 : 6;
   return `<div class="table-wrap"><table>
     <thead><tr><th>订单号</th><th>客户名字</th><th>地址</th><th>预计交期</th>${canAssignLogistics ? "<th>承接物流公司</th>" : ""}<th>物流单号</th><th>操作</th></tr></thead>
     <tbody>${rows.map((row) => `<tr data-logistics-order="${row.id}">
@@ -992,9 +994,14 @@ function logisticsOrdersTable(rows = [], logisticsCompanies = []) {
           ${logisticsCompanies.map((company) => `<option value="${company.id}" ${company.id === row.logisticsCompanyId ? "selected" : ""}>${company.name}</option>`).join("")}
         </select>
       </td>` : ""}
-      <td><input class="input logistics-tracking-input" value="${escapeAttr(row.logisticsTrackingNumber || "")}" placeholder="填写国际物流单号"></td>
+      <td>
+        <div class="logistics-tracking-cell">
+          <input class="input logistics-tracking-input" value="${escapeAttr(row.logisticsTrackingNumber || "")}" placeholder="填写国际物流单号">
+          <button class="btn small" data-track-logistics="${row.id}" type="button">追踪轨迹</button>
+        </div>
+      </td>
       <td><button class="btn small primary" data-save-logistics="${row.id}" type="button">保存单号</button></td>
-    </tr>`).join("")}</tbody>
+    </tr><tr class="logistics-track-row hidden" data-track-result="${row.id}"><td colspan="${colSpan}"><div class="logistics-track-box">请点击“追踪轨迹”查询。</div></td></tr>`).join("")}</tbody>
   </table></div>`;
 }
 
@@ -1056,6 +1063,56 @@ function bindLogisticsTrackingButtons(onDone) {
       btn.disabled = false;
     }
   }));
+}
+
+function bindLogisticsTrackButtons() {
+  $$("[data-track-logistics]").forEach((btn) => btn.addEventListener("click", async () => {
+    const orderId = btn.dataset.trackLogistics;
+    const row = btn.closest("[data-logistics-order]");
+    const resultRow = $(`[data-track-result="${orderId}"]`);
+    const box = $(".logistics-track-box", resultRow);
+    const trackingNumber = $(".logistics-tracking-input", row)?.value.trim() || "";
+    if (!trackingNumber) return alert("请先填写国际物流单号");
+    resultRow?.classList.remove("hidden");
+    if (box) box.innerHTML = `<p class="muted">正在查询物流轨迹...</p>`;
+    btn.disabled = true;
+    try {
+      const data = await api(`/api/logistics-orders/${orderId}/track?trackingNumber=${encodeURIComponent(trackingNumber)}`);
+      if (box) box.innerHTML = logisticsTrackResult(data);
+    } catch (error) {
+      if (box) box.innerHTML = `<p class="logistics-track-error">${escapeHtml(error.message || "物流轨迹查询失败，请稍后重试")}</p>`;
+    } finally {
+      btn.disabled = false;
+    }
+  }));
+}
+
+function logisticsTrackResult(data = {}) {
+  const records = Array.isArray(data.records) ? data.records : [];
+  if (!records.length) {
+    return `<div class="logistics-track-summary">
+      <strong>暂无轨迹</strong>
+      <span>${escapeHtml(data.message || "未查询到该运单号的物流轨迹，请确认单号是否正确。")}</span>
+    </div>`;
+  }
+  return records.map((record) => {
+    const events = Array.isArray(record.events) ? record.events : [];
+    return `<div class="logistics-track-record">
+      <div class="logistics-track-summary">
+        <strong>${escapeHtml(record.trackingNumber || data.trackingNumber || "-")}</strong>
+        <span>转单号：${escapeHtml(record.transferNumber || "-")} · 客户单号：${escapeHtml(record.customerReference || "-")} · 目的地：${escapeHtml(record.destination || "-")}${data.usedCustomerNo ? ` · 已使用客户编号 ${escapeHtml(data.usedCustomerNo)}` : ""}</span>
+      </div>
+      ${events.length ? `<div class="logistics-track-events">
+        ${events.map((event) => `<div class="logistics-track-event">
+          <div class="logistics-track-time">${escapeHtml(event.time || "-")}</div>
+          <div>
+            <strong>${escapeHtml(event.station || "-")}</strong>
+            <p>${escapeHtml(event.remark || event.status || "-")}</p>
+          </div>
+        </div>`).join("")}
+      </div>` : `<p class="muted">${escapeHtml(record.latestRemark || "暂无详细轨迹")}</p>`}
+    </div>`;
+  }).join("");
 }
 
 async function renderChatsPage(selectedPurchaseOrderId = "") {

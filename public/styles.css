@@ -1189,6 +1189,76 @@ tr:hover td { background: var(--hover); }
   border: 1px solid var(--notice-line);
 }
 
+.logistics-tracking-cell {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.logistics-track-row td {
+  background: var(--panel-2);
+  padding: 0;
+}
+
+.logistics-track-box {
+  padding: 12px 14px;
+}
+
+.logistics-track-record {
+  display: grid;
+  gap: 10px;
+}
+
+.logistics-track-record + .logistics-track-record {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.logistics-track-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.logistics-track-summary span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.logistics-track-events {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.logistics-track-event {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.logistics-track-time {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.logistics-track-event p {
+  margin: 4px 0 0;
+  color: var(--text);
+}
+
+.logistics-track-error {
+  margin: 0;
+  color: var(--red);
+}
+
 .factory-shell .sidebar { background: var(--factory-sidebar-bg); }
 .factory-shell .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
