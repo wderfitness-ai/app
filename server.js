@@ -3952,7 +3952,16 @@ async function appHandler(req, res) {
     if (url.pathname === "/api/session" && req.method === "GET") {
       const userId = verifySessionToken(parseCookies(req).session);
       if (userId === BOOTSTRAP_ADMIN.id && BOOTSTRAP_ADMIN.password) {
-        return json(res, 200, { user: publicUser(virtualBootstrapAdmin()), orderStatuses: ORDER_STATUS, purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS, statusZh: STATUS_ZH, roles: Object.values(ROLE), factories: [], logisticsCompanies: [] });
+        const db = await readDb();
+        return json(res, 200, {
+          user: publicUser(virtualBootstrapAdmin()),
+          orderStatuses: ORDER_STATUS,
+          purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS,
+          statusZh: STATUS_ZH,
+          roles: Object.values(ROLE),
+          factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })),
+          logisticsCompanies: (db.logistics_companies || []).map((company) => ({ id: company.id, name: company.name }))
+        });
       }
     }
     const db = await readDb();
