@@ -215,18 +215,14 @@ async function writeDb(db) {
     };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
     if (!ALLOW_ORDER_DATA_SHRINK) {
-      try {
-        const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false, ...(BLOB_READ_WRITE_TOKEN ? { token: BLOB_READ_WRITE_TOKEN } : {}) });
-        const currentDb = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
-        const currentSales = Array.isArray(currentDb?.sales_orders) ? currentDb.sales_orders.length : 0;
-        const currentPurchase = Array.isArray(currentDb?.purchase_orders) ? currentDb.purchase_orders.length : 0;
-        const nextSales = Array.isArray(db.sales_orders) ? db.sales_orders.length : 0;
-        const nextPurchase = Array.isArray(db.purchase_orders) ? db.purchase_orders.length : 0;
-        if ((currentSales > 0 && nextSales < currentSales) || (currentPurchase > 0 && nextPurchase < currentPurchase)) {
-          throw new Error(`Refusing to shrink order data: sales_orders ${currentSales} -> ${nextSales}, purchase_orders ${currentPurchase} -> ${nextPurchase}`);
-        }
-      } catch (error) {
-        if (String(error?.message || "").startsWith("Refusing to shrink order data")) throw error;
+      const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false, ...(BLOB_READ_WRITE_TOKEN ? { token: BLOB_READ_WRITE_TOKEN } : {}) });
+      const currentDb = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
+      const currentSales = Array.isArray(currentDb?.sales_orders) ? currentDb.sales_orders.length : 0;
+      const currentPurchase = Array.isArray(currentDb?.purchase_orders) ? currentDb.purchase_orders.length : 0;
+      const nextSales = Array.isArray(db.sales_orders) ? db.sales_orders.length : 0;
+      const nextPurchase = Array.isArray(db.purchase_orders) ? db.purchase_orders.length : 0;
+      if ((currentSales > 0 && nextSales < currentSales) || (currentPurchase > 0 && nextPurchase < currentPurchase)) {
+        throw new Error(`Refusing to shrink order data: sales_orders ${currentSales} -> ${nextSales}, purchase_orders ${currentPurchase} -> ${nextPurchase}`);
       }
     }
     await blobPut(BLOB_DB_PATH, JSON.stringify(db, null, 2), blobOptions);
