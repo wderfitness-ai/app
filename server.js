@@ -1802,23 +1802,60 @@ function extractImportedCustomerValues(lines) {
   return fallbackBlock.map(cleanImportedCustomerLine).filter(Boolean);
 }
 
+function extractPdfLabeledValue(lines, labels, startIndex = 0) {
+  const labelPattern = Array.isArray(labels) ? labels.join("|") : labels;
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = String(lines[index] || "");
+    const match = line.match(new RegExp(`\\b(?:${labelPattern})\\s*[:：]\\s*(.+)$`, "i"));
+    if (match?.[1]) return match[1].trim();
+  }
+  return "";
+}
+
+function extractPdfEmail(lines, startIndex = 0) {
+  return extractPdfLabeledValue(lines, ["Email", "E-mail", "Mail"], startIndex)
+    || (lines.slice(startIndex).join(" ").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "");
+}
+
+function extractPdfPhone(lines, startIndex = 0) {
+  return extractPdfLabeledValue(lines, ["Tel", "Phone", "Mobile", "Cell", "Telephone"], startIndex);
+}
+
+function extractPdfContact(lines, fallback = "", startIndex = 0) {
+  return extractPdfLabeledValue(lines, ["Attn", "Contact", "Contact Person", "Consignee"], startIndex) || fallback;
+}
+
+function extractPdfAddress(lines, startIndex = 0) {
+  const headingIndex = lines.findIndex((line, index) =>
+    index >= startIndex && /^(Final consignee and delivery address|Delivery address|Ship to|Shipping address|Address)\b/i.test(line)
+  );
+  if (headingIndex < 0) return "";
+  const headingLine = lines[headingIndex] || "";
+  const inlineValue = headingLine.match(/[:：]\s*(.+)$/)?.[1]?.trim();
+  if (inlineValue) return inlineValue;
+  const stopPattern = /^(Products|Terms|Product Totals|Item Details|Notes|Freight|Order Total|Currency|Delivery|Invoice|Payment|Supplier|Customer)\b/i;
+  const labelPattern = /^(Attn|Contact|Email|E-mail|Mail|Tel|Phone|Mobile|Cell|Telephone)\s*[:：]/i;
+  return lines.slice(headingIndex + 1)
+    .map(cleanImportedCustomerLine)
+    .filter((line) => line && !stopPattern.test(line) && !labelPattern.test(line))
+    .slice(0, 5)
+    .join(", ");
+}
+
 function commercialInvoiceCustomer(lines) {
   const supplierCustomerStart = lines.findIndex((line) => line === "Supplier Customer");
   const customerStart = lines.findIndex((line) => line === "Customer");
   if (customerStart >= 0) {
     const company = lines[customerStart + 1] || "Imported Customer";
-    const contactLine = lines.find((line, index) => index > customerStart && /\bAttn\s*:/i.test(line)) || "";
-    const emailLine = lines.find((line, index) => index > customerStart && /\bEmail\s*:/i.test(line)) || "";
-    const phoneLine = lines.find((line, index) => index > customerStart && /\bTel\s*:/i.test(line)) || "";
     return {
       name: company,
       company,
       country: "",
-      contact: contactLine.match(/Attn\s*:\s*(.+)$/i)?.[1]?.trim() || company,
-      email: emailLine.match(/Email\s*:\s*([^\s]+)/i)?.[1] || "",
+      contact: extractPdfContact(lines, company, customerStart),
+      email: extractPdfEmail(lines, customerStart),
       whatsapp: "",
-      phone: phoneLine.match(/Tel\s*:\s*(.+)$/i)?.[1]?.trim() || "",
-      address: lines.find((line) => /Final consignee and delivery address/i.test(line)) || "",
+      phone: extractPdfPhone(lines, customerStart),
+      address: extractPdfAddress(lines, customerStart),
       source: "Other",
       level: "B",
       remark: "Commercial Invoice PDF 导入客户"
@@ -1829,11 +1866,11 @@ function commercialInvoiceCustomer(lines) {
     .replace(/^QINGDAO\s+WDER\s+FITNESS\s+CO\.,?\s+LTD\.?\s*/i, "")
     .trim()
     || "Imported Customer";
-  const contactLine = lines.find((line) => /\bAttn\s*:/i.test(line)) || "";
-  const contact = contactLine.match(/Attn\s*:\s*(.+)$/i)?.[1]?.trim() || company;
-  const email = (lines.find((line) => /\bEmail\s*:/i.test(line)) || "").match(/Email\s*:\s*([^\s]+)/i)?.[1] || "";
-  const phone = (lines.find((line) => /\bTel\s*:/i.test(line)) || "").match(/Tel\s*:\s*(.+)$/i)?.[1]?.trim() || "";
-  const address = lines.find((line) => /Final consignee and delivery address/i.test(line)) || "";
+  const startIndex = supplierCustomerStart >= 0 ? supplierCustomerStart : 0;
+  const contact = extractPdfContact(lines, company, startIndex);
+  const email = extractPdfEmail(lines, startIndex);
+  const phone = extractPdfPhone(lines, startIndex);
+  const address = extractPdfAddress(lines, startIndex);
   return {
     name: company,
     company,
@@ -1861,7 +1898,7 @@ function parseCommercialInvoiceSalesOrderPdf(textValue, lines) {
     || Number((grandTotal - freight).toFixed(2));
   const deliveryLine = lines.find((line) => /^Delivery\s*:/i.test(line) || /\bDelivery:\s*/i.test(line)) || "";
   const deliveryAddress = deliveryLine.match(/Delivery\s*:\s*(.+)$/i)?.[1]?.trim()
-    || lines.find((line) => /Final consignee and delivery address/i.test(line)) || "";
+    || extractPdfAddress(lines) || "";
 
   const items = [];
   const detailStart = lines.findIndex((line) => line === "Item Details");
@@ -1952,7 +1989,10 @@ function parseImportedSalesOrderPdf(textContent) {
   const customerValues = extractImportedCustomerValues(lines);
   const customerName = customerValues[0] || "Imported Customer";
   const country = customerValues.find((line) => /^United States$/i.test(line)) || customerValues.at(-1) || "";
-  const address = customerValues.slice(1).filter((line) => line !== country).join(", ");
+  const contact = extractPdfContact(lines, customerName);
+  const email = extractPdfEmail(lines);
+  const phone = extractPdfPhone(lines);
+  const address = extractPdfAddress(lines) || customerValues.slice(1).filter((line) => line !== country).join(", ");
 
   const itemStart = lines.findIndex((line) => line === "Item Details");
   const notesStart = lines.findIndex((line, index) => index > itemStart && line === "Notes");
@@ -2043,7 +2083,10 @@ function parseImportedSalesOrderPdf(textContent) {
       name: customerName,
       company: customerName,
       country,
-      contact: customerName,
+      contact,
+      email,
+      whatsapp: "",
+      phone,
       address,
       source: "Other",
       level: "B",
