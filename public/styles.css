@@ -249,6 +249,22 @@ a {
   color: var(--sidebar-strong);
 }
 
+.sidebar-refresh-btn {
+  width: 100%;
+  min-height: 38px;
+  margin: 4px 0 10px;
+  border: 1px solid rgba(59, 130, 246, 0.55);
+  border-radius: 7px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sidebar-refresh-btn:hover {
+  background: var(--brand-2);
+}
+
 .factory-sidebar-notice {
   margin: 28px 0 0;
   padding: 14px;

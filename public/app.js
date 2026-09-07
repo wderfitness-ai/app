@@ -225,7 +225,7 @@ async function manualRefresh(button) {
     alert(`刷新失败：${error.message}`);
     if (button) {
       button.disabled = false;
-      button.textContent = "手动刷新";
+      button.textContent = button.dataset.refreshLabel || "手动刷新";
     }
   }
 }
@@ -395,6 +395,7 @@ function shell(content) {
           <div><strong>跟单管理系统</strong><span>订单与工厂生产管理</span></div>
         </div>
         <div class="nav-section">${isFactory ? "工厂端" : "管理后台"}</div>
+        <button class="sidebar-refresh-btn" type="button" data-manual-refresh data-refresh-label="刷新当前页面">刷新当前页面</button>
         ${nav.map(([href, label]) => navLinkHtml(href, label)).join("")}
         ${isFactory ? `
           <div class="factory-sidebar-notice">
@@ -419,7 +420,7 @@ function shell(content) {
                 <button class="btn small" id="openNotificationsPage" type="button">查看全部通知</button>
               </div>
             </div>
-            <button class="btn small primary manual-refresh-btn" id="manualRefreshBtn" type="button">手动刷新</button>
+            <button class="btn small primary manual-refresh-btn" type="button" data-manual-refresh data-refresh-label="手动刷新">手动刷新</button>
             <button class="btn small" id="logoutBtn">退出</button>
           </div>
         </header>
@@ -444,7 +445,7 @@ function shell(content) {
     history.pushState(null, "", "/");
     renderLogin();
   });
-  $("#manualRefreshBtn")?.addEventListener("click", (event) => manualRefresh(event.currentTarget));
+  $$("[data-manual-refresh]").forEach((button) => button.addEventListener("click", (event) => manualRefresh(event.currentTarget)));
   bindNotificationMenu();
   bindThemeControls();
   refreshNotifications();
