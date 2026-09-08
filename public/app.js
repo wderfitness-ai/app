@@ -507,7 +507,8 @@ function bindNotificationMenu() {
     await refreshNotifications();
   });
   $("#markAllNotificationsRead")?.addEventListener("click", async () => {
-    await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    const result = await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    updateNotificationBadges(result.unread || 0);
     await refreshNotifications();
     await refreshNavSummary();
     if (pathNow().endsWith("/notifications")) renderNotificationsPage();
@@ -609,7 +610,9 @@ async function renderNotificationsPage() {
   state.notifications = data;
   $("#notificationPageList").innerHTML = notificationListHtml(data.items || [], false);
   $("#readAllOnPage")?.addEventListener("click", async () => {
-    await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    const result = await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    updateNotificationBadges(result.unread || 0);
+    await refreshNavSummary();
     await renderNotificationsPage();
   });
   bindNotificationClicks();
@@ -634,13 +637,14 @@ function bindNotificationClicks() {
   $$("[data-notification-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       const id = button.dataset.notificationId;
-      await api(`/api/notifications/${id}`, { method: "PATCH", body: JSON.stringify({ ids: [id] }) });
+      const result = await api(`/api/notifications/${id}`, { method: "PATCH", body: JSON.stringify({ ids: [id] }) });
+      updateNotificationBadges(result.unread || 0);
+      await refreshNavSummary();
       const type = button.dataset.entityType;
       const entityId = button.dataset.entityId;
       if (type === "sales_order" && entityId) return go(`/admin/orders/${entityId}`);
       if (type === "purchase_order" && entityId) return go(state.user.role === "Factory" ? `/factory/orders/${entityId}` : `/admin/purchase-orders/${entityId}`);
       await refreshNotifications();
-      await refreshNavSummary();
     });
   });
 }

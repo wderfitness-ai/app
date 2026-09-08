@@ -2837,7 +2837,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
         if (!notification.readBy.includes(user.id)) notification.readBy.push(user.id);
       }
       await writeDb(db);
-      return json(res, 200, { ok: true });
+      const items = visibleNotifications(db, user);
+      return json(res, 200, { ok: true, unread: items.filter((item) => item.unread).length });
     }
   }
 
