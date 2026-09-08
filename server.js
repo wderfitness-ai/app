@@ -236,8 +236,8 @@ async function saveProtectedBaselineDb(db) {
 
 function protectedRecordKey(item, collectionKey) {
   if (!item || typeof item !== "object") return "";
-  if (item.id) return String(item.id);
   if (collectionKey === "users" && item.email) return `email:${String(item.email).toLowerCase()}`;
+  if (item.id) return String(item.id);
   if (collectionKey === "sales_orders" && item.orderNo) return `order:${item.orderNo}`;
   if (collectionKey === "purchase_orders" && item.poNo) return `purchase:${item.poNo}`;
   if (collectionKey === "customers" && (item.company || item.name)) return `customer:${item.company || item.name}`;
