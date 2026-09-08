@@ -237,12 +237,12 @@ async function saveProtectedBaselineDb(db) {
 function protectedRecordKey(item, collectionKey) {
   if (!item || typeof item !== "object") return "";
   if (collectionKey === "users" && item.email) return `email:${String(item.email).toLowerCase()}`;
+  if (collectionKey === "logistics_companies" && (item.name || item.email)) return `logistics:${String(item.name || item.email).toLowerCase()}`;
   if (item.id) return String(item.id);
   if (collectionKey === "sales_orders" && item.orderNo) return `order:${item.orderNo}`;
   if (collectionKey === "purchase_orders" && item.poNo) return `purchase:${item.poNo}`;
   if (collectionKey === "customers" && (item.company || item.name)) return `customer:${item.company || item.name}`;
   if (collectionKey === "factories" && item.name) return `factory:${item.name}`;
-  if (collectionKey === "logistics_companies" && (item.name || item.email)) return `logistics:${item.name || item.email}`;
   if (collectionKey === "products" && (item.model || item.name)) return `product:${item.model || item.name}`;
   if (collectionKey === "order_files" && (item.path || item.fileName)) return `file:${item.path || item.fileName}`;
   if (collectionKey === "order_timeline" && (item.orderId || item.createdAt || item.note)) return `timeline:${item.orderId || ""}:${item.createdAt || ""}:${item.note || item.newStatus || ""}`;
@@ -289,19 +289,73 @@ function mergeProtectedDb(nextDb, currentDb = null, baseline = null) {
   };
 }
 
+function logisticsCompanyIdentity(company) {
+  return String(company?.name || company?.email || company?.id || "").trim().toLowerCase();
+}
+
+function dedupeLogisticsCompanies(db) {
+  if (!Array.isArray(db.logistics_companies) || db.logistics_companies.length < 2) return false;
+  let changed = false;
+  const byKey = new Map();
+  const idMap = new Map();
+  const deduped = [];
+  for (const company of db.logistics_companies) {
+    const key = logisticsCompanyIdentity(company);
+    if (!key) {
+      deduped.push(company);
+      continue;
+    }
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, company);
+      deduped.push(company);
+      continue;
+    }
+    changed = true;
+    const keep = existing.enabled === false && company.enabled !== false ? company : existing;
+    const remove = keep === existing ? company : existing;
+    const merged = { ...remove, ...keep, id: keep.id || remove.id, name: keep.name || remove.name };
+    const existingIndex = deduped.findIndex((item) => item.id === existing.id);
+    if (existingIndex >= 0) deduped[existingIndex] = merged;
+    byKey.set(key, merged);
+    if (remove.id && merged.id && remove.id !== merged.id) idMap.set(remove.id, merged.id);
+  }
+  if (!changed) return false;
+  for (const user of db.users || []) {
+    if (idMap.has(user.logisticsCompanyId)) user.logisticsCompanyId = idMap.get(user.logisticsCompanyId);
+  }
+  for (const order of db.sales_orders || []) {
+    if (idMap.has(order.logisticsCompanyId)) order.logisticsCompanyId = idMap.get(order.logisticsCompanyId);
+  }
+  db.logistics_companies = deduped;
+  return true;
+}
+
+function publicLogisticsCompanies(db, { enabledOnly = false } = {}) {
+  const map = new Map();
+  for (const company of db.logistics_companies || []) {
+    if (enabledOnly && company.enabled === false) continue;
+    const key = logisticsCompanyIdentity(company);
+    if (!key || map.has(key)) continue;
+    map.set(key, { id: company.id, name: company.name });
+  }
+  return [...map.values()];
+}
+
 async function readDb() {
   if (USE_BLOB_DB) {
     const blobOptions = { access: "private", useCache: false };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
     const stored = await blobGet(BLOB_DB_PATH, blobOptions);
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
-    ensureDbShape(db);
+    const changed = ensureDbShape(db);
     const baseline = await loadProtectedBaselineDb();
     if (!ALLOW_ORDER_DATA_SHRINK && shouldRepairFromBaseline(db, baseline)) {
       const { db: repairedDb } = mergeProtectedDb(db, null, baseline);
       await writeDb(repairedDb);
       return repairedDb;
     }
+    if (changed) await writeDb(db);
     return db;
   }
   await ensureDataFile();
@@ -341,6 +395,7 @@ function ensureDbShape(db) {
       changed = true;
     }
   }
+  if (dedupeLogisticsCompanies(db)) changed = true;
   return changed;
 }
 
@@ -2735,7 +2790,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     statusZh: STATUS_ZH,
     roles: Object.values(ROLE),
     factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })),
-    logisticsCompanies: (db.logistics_companies || []).map((company) => ({ id: company.id, name: company.name }))
+    logisticsCompanies: publicLogisticsCompanies(db)
   });
   if (!requireAuth(user, res)) return;
 
@@ -3217,9 +3272,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       const rows = filterGeneric(visibleLogisticsOrders(db, user), query, ["orderNo", "customerName", "customerCompany", "address", "customerPhone", "logisticsTrackingNumber", "packageMeasurementsText"], "expectedDeliveryDate");
       return json(res, 200, {
         ...paginate(rows, query),
-        logisticsCompanies: (db.logistics_companies || [])
-          .filter((company) => company.enabled !== false)
-          .map((company) => ({ id: company.id, name: company.name }))
+        logisticsCompanies: publicLogisticsCompanies(db, { enabledOnly: true })
       });
     }
     if (method === "PATCH" && resourceId) {
@@ -4011,7 +4064,7 @@ async function appHandler(req, res) {
           statusZh: STATUS_ZH,
           roles: Object.values(ROLE),
           factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })),
-          logisticsCompanies: (db.logistics_companies || []).map((company) => ({ id: company.id, name: company.name }))
+          logisticsCompanies: publicLogisticsCompanies(db)
         });
       }
     }
