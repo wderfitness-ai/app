@@ -606,7 +606,13 @@ function updateGlobalAnnouncement(data = {}) {
 
 async function renderNotificationsPage() {
   shell(pageTitle("通知中心", "按当前账号权限显示订单相关通知。", `<button class="btn" id="readAllOnPage">全部标记已读</button>`) + `<section class="panel"><div id="notificationPageList">加载中...</div></section>`);
-  const data = await api("/api/notifications?limit=100");
+  let data = await api("/api/notifications?limit=100");
+  if (data.unread) {
+    const result = await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
+    updateNotificationBadges(result.unread || 0);
+    await refreshNavSummary();
+    data = await api("/api/notifications?limit=100");
+  }
   state.notifications = data;
   $("#notificationPageList").innerHTML = notificationListHtml(data.items || [], false);
   $("#readAllOnPage")?.addEventListener("click", async () => {
