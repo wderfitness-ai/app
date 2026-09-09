@@ -32,6 +32,8 @@ const PROTECTED_DB_BLOB_PATH = process.env.PROTECTED_DB_BLOB_PATH || "data/prote
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 const ALLOW_ORDER_DATA_SHRINK = process.env.ALLOW_ORDER_DATA_SHRINK === "true";
+const DB_READ_CACHE_MS = Number(process.env.DB_READ_CACHE_MS || 1500);
+const PROTECTED_BASELINE_CACHE_MS = Number(process.env.PROTECTED_BASELINE_CACHE_MS || 30000);
 const PROTECTED_COLLECTION_KEYS = [
   "users",
   "customers",
@@ -56,6 +58,8 @@ const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ENMAO_TRACKING_ENDPOINT = "https://vip.yjtms.com:11000/tms-saas-oms/oms/tms/tracequery/out/list";
 const ENMAO_TRACKING_COMPANY_ID = "40";
 const ENMAO_TRACKING_CUSTOMER_NO = "92356";
+let dbReadCache = { db: null, expiresAt: 0 };
+let protectedBaselineCache = { db: null, expiresAt: 0 };
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -184,6 +188,26 @@ function emptyDb() {
   };
 }
 
+function cloneData(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function rememberDbCache(db) {
+  if (DB_READ_CACHE_MS > 0) {
+    dbReadCache = { db: cloneData(db), expiresAt: Date.now() + DB_READ_CACHE_MS };
+  }
+}
+
+function clearDbCache() {
+  dbReadCache = { db: null, expiresAt: 0 };
+}
+
+function rememberProtectedBaselineCache(db) {
+  if (PROTECTED_BASELINE_CACHE_MS > 0) {
+    protectedBaselineCache = { db: cloneData(db), expiresAt: Date.now() + PROTECTED_BASELINE_CACHE_MS };
+  }
+}
+
 function parseProtectedBaselineDb(raw) {
   const db = JSON.parse(raw);
   ensureDbShape(db);
@@ -201,19 +225,25 @@ function loadLocalProtectedBaselineDb() {
 }
 
 async function loadProtectedBaselineDb() {
+  if (PROTECTED_BASELINE_CACHE_MS > 0 && protectedBaselineCache.db && protectedBaselineCache.expiresAt > Date.now()) {
+    return cloneData(protectedBaselineCache.db);
+  }
+  let baseline = null;
   if (USE_BLOB_DB) {
     try {
       const blobOptions = { access: "private", useCache: false };
       if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
       const stored = await blobGet(PROTECTED_DB_BLOB_PATH, blobOptions);
-      if (!stored?.stream) return null;
-      return parseProtectedBaselineDb(await new Response(stored.stream).text());
+      baseline = stored?.stream ? parseProtectedBaselineDb(await new Response(stored.stream).text()) : null;
     } catch (error) {
       console.error("Failed to load protected Blob data baseline", error);
       return null;
     }
+  } else {
+    baseline = loadLocalProtectedBaselineDb();
   }
-  return loadLocalProtectedBaselineDb();
+  if (baseline) rememberProtectedBaselineCache(baseline);
+  return baseline ? cloneData(baseline) : null;
 }
 
 async function saveProtectedBaselineDb(db) {
@@ -228,10 +258,12 @@ async function saveProtectedBaselineDb(db) {
     };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
     await blobPut(PROTECTED_DB_BLOB_PATH, content, blobOptions);
+    rememberProtectedBaselineCache(db);
     return;
   }
   await mkdir(path.dirname(PROTECTED_DB_FILE), { recursive: true });
   await writeFile(PROTECTED_DB_FILE, content);
+  rememberProtectedBaselineCache(db);
 }
 
 function protectedRecordKey(item, collectionKey) {
@@ -343,20 +375,24 @@ function publicLogisticsCompanies(db, { enabledOnly = false } = {}) {
 }
 
 async function readDb() {
+  if (DB_READ_CACHE_MS > 0 && dbReadCache.db && dbReadCache.expiresAt > Date.now()) {
+    return cloneData(dbReadCache.db);
+  }
   if (USE_BLOB_DB) {
     const blobOptions = { access: "private", useCache: false };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
     const stored = await blobGet(BLOB_DB_PATH, blobOptions);
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
-    const changed = ensureDbShape(db);
+    ensureDbShape(db);
     const baseline = await loadProtectedBaselineDb();
     if (!ALLOW_ORDER_DATA_SHRINK && shouldRepairFromBaseline(db, baseline)) {
       const { db: repairedDb } = mergeProtectedDb(db, null, baseline);
       await writeDb(repairedDb);
-      return repairedDb;
+      rememberDbCache(repairedDb);
+      return cloneData(repairedDb);
     }
-    if (changed) await writeDb(db);
-    return db;
+    rememberDbCache(db);
+    return cloneData(db);
   }
   await ensureDataFile();
   const db = JSON.parse(await readFile(DATA_FILE, "utf8"));
@@ -365,10 +401,12 @@ async function readDb() {
   if (!ALLOW_ORDER_DATA_SHRINK && shouldRepairFromBaseline(db, baseline)) {
     const { db: repairedDb } = mergeProtectedDb(db, null, baseline);
     await writeDb(repairedDb);
-    return repairedDb;
+    rememberDbCache(repairedDb);
+    return cloneData(repairedDb);
   }
   if (changed) await writeDb(db);
-  return db;
+  rememberDbCache(db);
+  return cloneData(db);
 }
 
 function ensureDbShape(db) {
@@ -400,6 +438,7 @@ function ensureDbShape(db) {
 }
 
 async function writeDb(db) {
+  clearDbCache();
   if (USE_BLOB_DB) {
     let dbToWrite = db;
     let currentDb = null;
@@ -426,12 +465,14 @@ async function writeDb(db) {
       }
     }
     await blobPut(BLOB_DB_PATH, JSON.stringify(dbToWrite, null, 2), blobOptions);
+    rememberDbCache(dbToWrite);
     return;
   }
   await mkdir(path.dirname(DATA_FILE), { recursive: true });
   const baseline = await loadProtectedBaselineDb();
   const { db: dbToWrite } = ALLOW_ORDER_DATA_SHRINK ? { db } : mergeProtectedDb(db, null, baseline);
   await writeFile(DATA_FILE, JSON.stringify(dbToWrite, null, 2));
+  rememberDbCache(dbToWrite);
 }
 
 function id(prefix) {

@@ -1,5 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const SHELL_REFRESH_MIN_MS = 5000;
 
 const state = {
   user: null,
@@ -12,6 +13,7 @@ const state = {
   notifications: { items: [], unread: 0 },
   navSummary: { deliveryDueTodayCount: 0, unreadNotifications: 0, unreadChats: 0, deliveryDueToday: [], notifications: [] },
   cache: {},
+  refreshMeta: { notificationsAt: 0, navSummaryAt: 0 },
   dashboardScrollTimers: []
 };
 
@@ -504,13 +506,13 @@ function navLinkHtml(href, label) {
 function bindNotificationMenu() {
   $("#notificationBtn")?.addEventListener("click", async () => {
     $("#notificationMenu")?.classList.toggle("hidden");
-    await refreshNotifications();
+    await refreshNotifications(true);
   });
   $("#markAllNotificationsRead")?.addEventListener("click", async () => {
     const result = await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
     updateNotificationBadges(result.unread || 0);
-    await refreshNotifications();
-    await refreshNavSummary();
+    await refreshNotifications(true);
+    await refreshNavSummary(true);
     if (pathNow().endsWith("/notifications")) renderNotificationsPage();
   });
   $("#openNotificationsPage")?.addEventListener("click", () => {
@@ -525,8 +527,10 @@ function bindNotificationMenu() {
   }
 }
 
-async function refreshNotifications() {
+async function refreshNotifications(force = false) {
   if (!state.user) return;
+  if (!force && Date.now() - state.refreshMeta.notificationsAt < SHELL_REFRESH_MIN_MS) return;
+  state.refreshMeta.notificationsAt = Date.now();
   try {
     const data = await api("/api/notifications?limit=8");
     state.notifications = data;
@@ -540,8 +544,10 @@ async function refreshNotifications() {
   }
 }
 
-async function refreshNavSummary() {
+async function refreshNavSummary(force = false) {
   if (!state.user) return;
+  if (!force && Date.now() - state.refreshMeta.navSummaryAt < SHELL_REFRESH_MIN_MS) return;
+  state.refreshMeta.navSummaryAt = Date.now();
   try {
     const data = await api("/api/nav-summary");
     state.navSummary = data;
@@ -551,7 +557,7 @@ async function refreshNavSummary() {
     updateGlobalAnnouncement(data);
     if (!window.__navSummaryTimer) {
       window.__navSummaryTimer = setInterval(() => {
-        if (state.user) refreshNavSummary();
+        if (state.user) refreshNavSummary(true);
       }, 60_000);
     }
   } catch {
@@ -610,7 +616,7 @@ async function renderNotificationsPage() {
   if (data.unread) {
     const result = await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
     updateNotificationBadges(result.unread || 0);
-    await refreshNavSummary();
+    await refreshNavSummary(true);
     data = await api("/api/notifications?limit=100");
   }
   state.notifications = data;
@@ -618,12 +624,12 @@ async function renderNotificationsPage() {
   $("#readAllOnPage")?.addEventListener("click", async () => {
     const result = await api("/api/notifications", { method: "PATCH", body: JSON.stringify({ all: true }) });
     updateNotificationBadges(result.unread || 0);
-    await refreshNavSummary();
+    await refreshNavSummary(true);
     await renderNotificationsPage();
   });
   bindNotificationClicks();
   updateNotificationBadges(data.unread);
-  refreshNavSummary();
+  refreshNavSummary(true);
 }
 
 function notificationListHtml(items = [], compact = false) {
@@ -645,12 +651,12 @@ function bindNotificationClicks() {
       const id = button.dataset.notificationId;
       const result = await api(`/api/notifications/${id}`, { method: "PATCH", body: JSON.stringify({ ids: [id] }) });
       updateNotificationBadges(result.unread || 0);
-      await refreshNavSummary();
+      await refreshNavSummary(true);
       const type = button.dataset.entityType;
       const entityId = button.dataset.entityId;
       if (type === "sales_order" && entityId) return go(`/admin/orders/${entityId}`);
       if (type === "purchase_order" && entityId) return go(state.user.role === "Factory" ? `/factory/orders/${entityId}` : `/admin/purchase-orders/${entityId}`);
-      await refreshNotifications();
+      await refreshNotifications(true);
     });
   });
 }
