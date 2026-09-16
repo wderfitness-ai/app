@@ -32,7 +32,7 @@ const PROTECTED_DB_BLOB_PATH = process.env.PROTECTED_DB_BLOB_PATH || "data/prote
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
 const USE_BLOB_DB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 const ALLOW_ORDER_DATA_SHRINK = process.env.ALLOW_ORDER_DATA_SHRINK === "true";
-const DB_READ_CACHE_MS = Number(process.env.DB_READ_CACHE_MS || 1500);
+const DB_READ_CACHE_MS = Number(process.env.DB_READ_CACHE_MS || 0);
 const PROTECTED_BASELINE_CACHE_MS = Number(process.env.PROTECTED_BASELINE_CACHE_MS || 30000);
 const PROTECTED_COLLECTION_KEYS = [
   "users",
@@ -666,7 +666,11 @@ function bodyJson(req) {
 }
 
 function json(res, status, data, headers = {}) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store, max-age=0",
+    ...headers
+  });
   res.end(JSON.stringify(data));
 }
 
