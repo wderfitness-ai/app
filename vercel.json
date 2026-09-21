@@ -18,15 +18,24 @@
     },
     {
       "src": "/app.js",
-      "dest": "/public/app.js"
+      "dest": "/public/app.js",
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
     },
     {
       "src": "/styles.css",
-      "dest": "/public/styles.css"
+      "dest": "/public/styles.css",
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
     },
     {
       "src": "/assets/(.*)",
-      "dest": "/public/assets/$1"
+      "dest": "/public/assets/$1",
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
     },
     {
       "src": "/favicon.png",
