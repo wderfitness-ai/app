@@ -58,8 +58,8 @@ const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ENMAO_TRACKING_ENDPOINT = "https://vip.yjtms.com:11000/tms-saas-oms/oms/tms/tracequery/out/list";
 const ENMAO_TRACKING_COMPANY_ID = "40";
 const ENMAO_TRACKING_CUSTOMER_NO = "92356";
-let dbReadCache = { db: null, expiresAt: 0 };
-let protectedBaselineCache = { db: null, expiresAt: 0 };
+let dbReadCache = { db: null, etag: "", expiresAt: 0 };
+let protectedBaselineCache = { db: null, etag: "", expiresAt: 0 };
 
 const BUYER_INFO = {
   company: "青岛维德立机械制造有限公司",
@@ -189,23 +189,30 @@ function emptyDb() {
 }
 
 function cloneData(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
+  if (value == null) return value;
+  return typeof structuredClone === "function"
+    ? structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
 }
 
-function rememberDbCache(db) {
-  if (DB_READ_CACHE_MS > 0) {
-    dbReadCache = { db: cloneData(db), expiresAt: Date.now() + DB_READ_CACHE_MS };
-  }
+function rememberDbCache(db, etag = "") {
+  dbReadCache = {
+    db: cloneData(db),
+    etag: String(etag || dbReadCache.etag || ""),
+    expiresAt: DB_READ_CACHE_MS > 0 ? Date.now() + DB_READ_CACHE_MS : 0
+  };
 }
 
 function clearDbCache() {
-  dbReadCache = { db: null, expiresAt: 0 };
+  dbReadCache = { db: null, etag: "", expiresAt: 0 };
 }
 
-function rememberProtectedBaselineCache(db) {
-  if (PROTECTED_BASELINE_CACHE_MS > 0) {
-    protectedBaselineCache = { db: cloneData(db), expiresAt: Date.now() + PROTECTED_BASELINE_CACHE_MS };
-  }
+function rememberProtectedBaselineCache(db, etag = "") {
+  protectedBaselineCache = {
+    db: cloneData(db),
+    etag: String(etag || protectedBaselineCache.etag || ""),
+    expiresAt: PROTECTED_BASELINE_CACHE_MS > 0 ? Date.now() + PROTECTED_BASELINE_CACHE_MS : 0
+  };
 }
 
 function parseProtectedBaselineDb(raw) {
@@ -233,8 +240,14 @@ async function loadProtectedBaselineDb() {
     try {
       const blobOptions = { access: "private", useCache: false };
       if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+      if (protectedBaselineCache.db && protectedBaselineCache.etag) blobOptions.ifNoneMatch = protectedBaselineCache.etag;
       const stored = await blobGet(PROTECTED_DB_BLOB_PATH, blobOptions);
+      if (stored?.statusCode === 304 && protectedBaselineCache.db) {
+        rememberProtectedBaselineCache(protectedBaselineCache.db, protectedBaselineCache.etag);
+        return cloneData(protectedBaselineCache.db);
+      }
       baseline = stored?.stream ? parseProtectedBaselineDb(await new Response(stored.stream).text()) : null;
+      if (baseline) rememberProtectedBaselineCache(baseline, stored?.blob?.etag || "");
     } catch (error) {
       console.error("Failed to load protected Blob data baseline", error);
       return null;
@@ -242,7 +255,7 @@ async function loadProtectedBaselineDb() {
   } else {
     baseline = loadLocalProtectedBaselineDb();
   }
-  if (baseline) rememberProtectedBaselineCache(baseline);
+  if (baseline && !USE_BLOB_DB) rememberProtectedBaselineCache(baseline);
   return baseline ? cloneData(baseline) : null;
 }
 
@@ -257,8 +270,8 @@ async function saveProtectedBaselineDb(db) {
       cacheControlMaxAge: 60
     };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
-    await blobPut(PROTECTED_DB_BLOB_PATH, content, blobOptions);
-    rememberProtectedBaselineCache(db);
+    const stored = await blobPut(PROTECTED_DB_BLOB_PATH, content, blobOptions);
+    rememberProtectedBaselineCache(db, stored?.etag || "");
     return;
   }
   await mkdir(path.dirname(PROTECTED_DB_FILE), { recursive: true });
@@ -381,7 +394,9 @@ async function readDb() {
   if (USE_BLOB_DB) {
     const blobOptions = { access: "private", useCache: false };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
+    if (dbReadCache.db && dbReadCache.etag) blobOptions.ifNoneMatch = dbReadCache.etag;
     const stored = await blobGet(BLOB_DB_PATH, blobOptions);
+    if (stored?.statusCode === 304 && dbReadCache.db) return cloneData(dbReadCache.db);
     const db = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : emptyDb();
     ensureDbShape(db);
     const baseline = await loadProtectedBaselineDb();
@@ -391,7 +406,7 @@ async function readDb() {
       rememberDbCache(repairedDb);
       return cloneData(repairedDb);
     }
-    rememberDbCache(db);
+    rememberDbCache(db, stored?.blob?.etag || "");
     return cloneData(db);
   }
   await ensureDataFile();
@@ -438,7 +453,6 @@ function ensureDbShape(db) {
 }
 
 async function writeDb(db) {
-  clearDbCache();
   if (USE_BLOB_DB) {
     let dbToWrite = db;
     let currentDb = null;
@@ -450,8 +464,16 @@ async function writeDb(db) {
     };
     if (BLOB_READ_WRITE_TOKEN) blobOptions.token = BLOB_READ_WRITE_TOKEN;
     if (!ALLOW_ORDER_DATA_SHRINK) {
-      const stored = await blobGet(BLOB_DB_PATH, { access: "private", useCache: false, ...(BLOB_READ_WRITE_TOKEN ? { token: BLOB_READ_WRITE_TOKEN } : {}) });
-      currentDb = stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
+      const currentOptions = {
+        access: "private",
+        useCache: false,
+        ...(BLOB_READ_WRITE_TOKEN ? { token: BLOB_READ_WRITE_TOKEN } : {}),
+        ...(dbReadCache.db && dbReadCache.etag ? { ifNoneMatch: dbReadCache.etag } : {})
+      };
+      const stored = await blobGet(BLOB_DB_PATH, currentOptions);
+      currentDb = stored?.statusCode === 304 && dbReadCache.db
+        ? cloneData(dbReadCache.db)
+        : stored?.stream ? JSON.parse(await new Response(stored.stream).text()) : null;
       if (currentDb) ensureDbShape(currentDb);
       const baseline = await loadProtectedBaselineDb();
       const protectedMerge = mergeProtectedDb(db, currentDb, baseline);
@@ -464,8 +486,8 @@ async function writeDb(db) {
         throw new Error(`Refusing to shrink order data: sales_orders ${currentSales} -> ${nextSales}, purchase_orders ${currentPurchase} -> ${nextPurchase}`);
       }
     }
-    await blobPut(BLOB_DB_PATH, JSON.stringify(dbToWrite, null, 2), blobOptions);
-    rememberDbCache(dbToWrite);
+    const stored = await blobPut(BLOB_DB_PATH, JSON.stringify(dbToWrite, null, 2), blobOptions);
+    rememberDbCache(dbToWrite, stored?.etag || "");
     return;
   }
   await mkdir(path.dirname(DATA_FILE), { recursive: true });
@@ -721,6 +743,21 @@ function requireRole(user, res, roles) {
 }
 
 function audit(db, user, entityType, entityId, action, before, after) {
+  const compactAuditValue = (value, depth = 0) => {
+    if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "string") return value.length > 4000 ? `[已省略 ${value.length} 字符的大字段]` : value;
+    if (depth >= 6) return "[已省略深层数据]";
+    if (Array.isArray(value)) return value.map((item) => compactAuditValue(item, depth + 1));
+    if (typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+        if (["contentBase64", "logoImageData", "businessLicenseBase64"].includes(key) && item) {
+          return [key, `[已省略 ${String(item).length} 字符的二进制内容]`];
+        }
+        return [key, compactAuditValue(item, depth + 1)];
+      }));
+    }
+    return String(value);
+  };
   db.audit_logs.push({
     id: id("audit"),
     entityType,
@@ -729,8 +766,8 @@ function audit(db, user, entityType, entityId, action, before, after) {
     actorId: user?.id || "system",
     actorName: user?.name || "System",
     createdAt: now(),
-    before,
-    after
+    before: compactAuditValue(before),
+    after: compactAuditValue(after)
   });
 }
 
@@ -961,6 +998,30 @@ function chatUnreadCount(db, user) {
   return visibleChatMessages(db, user)
     .filter((message) => message.authorId !== user.id && !message.readBy?.includes(user.id))
     .length;
+}
+
+function navSummaryForUser(db, user) {
+  const notifications = visibleNotifications(db, user);
+  const unreadNotifications = notifications.filter((item) => item.unread);
+  const todayUnreadNotifications = unreadNotifications.filter((item) => String(item.createdAt || "").slice(0, 10) === today());
+  const todayDueOrders = todayDeliveryPurchaseOrders(db, user).map((po) => {
+    const factory = db.factories.find((item) => item.id === po.factoryId);
+    return {
+      id: po.id,
+      poNo: po.poNo,
+      factoryName: factory?.name || "",
+      factoryDeliveryDate: po.factoryDeliveryDate || "",
+      productionStatus: po.productionStatus || ""
+    };
+  });
+  return {
+    deliveryDueTodayCount: todayDueOrders.length,
+    deliveryDueToday: todayDueOrders.slice(0, 8),
+    unreadNotifications: unreadNotifications.length,
+    unreadChats: chatUnreadCount(db, user),
+    notifications: todayUnreadNotifications.slice(0, 8),
+    notificationPreview: notifications.slice(0, 8)
+  };
 }
 
 function chatAttachmentFiles(db, message) {
@@ -2983,7 +3044,8 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
     statusZh: STATUS_ZH,
     roles: Object.values(ROLE),
     factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })),
-    logisticsCompanies: publicLogisticsCompanies(db)
+    logisticsCompanies: publicLogisticsCompanies(db),
+    navSummary: user ? navSummaryForUser(db, user) : null
   });
   if (!requireAuth(user, res)) return;
 
@@ -3418,26 +3480,7 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
   }
 
   if (resource === "nav-summary" && method === "GET") {
-    const notifications = visibleNotifications(db, user);
-    const unreadNotifications = notifications.filter((item) => item.unread);
-    const todayUnreadNotifications = unreadNotifications.filter((item) => String(item.createdAt || "").slice(0, 10) === today());
-    const todayDueOrders = todayDeliveryPurchaseOrders(db, user).map((po) => {
-      const factory = db.factories.find((item) => item.id === po.factoryId);
-      return {
-        id: po.id,
-        poNo: po.poNo,
-        factoryName: factory?.name || "",
-        factoryDeliveryDate: po.factoryDeliveryDate || "",
-        productionStatus: po.productionStatus || ""
-      };
-    });
-    return json(res, 200, {
-      deliveryDueTodayCount: todayDueOrders.length,
-      deliveryDueToday: todayDueOrders.slice(0, 8),
-      unreadNotifications: unreadNotifications.length,
-      unreadChats: chatUnreadCount(db, user),
-      notifications: todayUnreadNotifications.slice(0, 8)
-    });
+    return json(res, 200, navSummaryForUser(db, user));
   }
 
   if (resource === "logistics-orders") {
@@ -4264,14 +4307,16 @@ async function appHandler(req, res) {
       const userId = verifySessionToken(parseCookies(req).session);
       if (userId === BOOTSTRAP_ADMIN.id && BOOTSTRAP_ADMIN.password) {
         const db = await readDb();
+        const bootstrapUser = virtualBootstrapAdmin();
         return json(res, 200, {
-          user: publicUser(virtualBootstrapAdmin()),
+          user: publicUser(bootstrapUser),
           orderStatuses: ORDER_STATUS,
           purchaseProductionStatuses: PURCHASE_PRODUCTION_STATUS,
           statusZh: STATUS_ZH,
           roles: Object.values(ROLE),
           factories: db.factories.map((factory) => ({ id: factory.id, name: factory.name })),
-          logisticsCompanies: publicLogisticsCompanies(db)
+          logisticsCompanies: publicLogisticsCompanies(db),
+          navSummary: navSummaryForUser(db, bootstrapUser)
         });
       }
     }

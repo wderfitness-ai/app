@@ -261,6 +261,14 @@ async function boot() {
     state.roles = session.roles || [];
     state.factories = session.factories || [];
     state.logisticsCompanies = session.logisticsCompanies || [];
+    if (session.navSummary) {
+      state.navSummary = session.navSummary;
+      state.notifications = {
+        items: session.navSummary.notificationPreview || [],
+        unread: session.navSummary.unreadNotifications || 0
+      };
+      state.refreshMeta.navSummaryAt = Date.now();
+    }
     render();
   } catch {
     renderLogin();
@@ -493,8 +501,22 @@ function shell(content) {
   $$("[data-manual-refresh]").forEach((button) => button.addEventListener("click", (event) => manualRefresh(event.currentTarget)));
   bindNotificationMenu();
   bindThemeControls();
-  refreshNotifications();
+  applyNavSummary(state.navSummary);
   refreshNavSummary();
+}
+
+function applyNavSummary(data = {}) {
+  state.navSummary = data;
+  updateDeliveryNavBadge(data.deliveryDueTodayCount);
+  updateNotificationBadges(data.unreadNotifications);
+  updateChatNavBadge(data.unreadChats);
+  updateGlobalAnnouncement(data);
+  if (Array.isArray(data.notificationPreview)) {
+    state.notifications = { items: data.notificationPreview, unread: data.unreadNotifications || 0 };
+    const preview = $("#notificationPreview");
+    if (preview) preview.innerHTML = notificationListHtml(data.notificationPreview, true);
+    bindNotificationClicks();
+  }
 }
 
 function navLinkHtml(href, label) {
@@ -550,11 +572,7 @@ async function refreshNavSummary(force = false) {
   state.refreshMeta.navSummaryAt = Date.now();
   try {
     const data = await api("/api/nav-summary");
-    state.navSummary = data;
-    updateDeliveryNavBadge(data.deliveryDueTodayCount);
-    updateNotificationBadges(data.unreadNotifications);
-    updateChatNavBadge(data.unreadChats);
-    updateGlobalAnnouncement(data);
+    applyNavSummary(data);
     if (!window.__navSummaryTimer) {
       window.__navSummaryTimer = setInterval(() => {
         if (state.user) refreshNavSummary(true);
@@ -671,6 +689,14 @@ async function render() {
     state.roles = session.roles || [];
     state.factories = session.factories || [];
     state.logisticsCompanies = session.logisticsCompanies || [];
+    if (session.navSummary) {
+      state.navSummary = session.navSummary;
+      state.notifications = {
+        items: session.navSummary.notificationPreview || [],
+        unread: session.navSummary.unreadNotifications || 0
+      };
+      state.refreshMeta.navSummaryAt = Date.now();
+    }
     if (!state.user) return renderLogin();
   }
   const path = pathNow();
