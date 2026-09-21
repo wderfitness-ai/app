@@ -1769,6 +1769,8 @@ const PRODUCT_ZH = {
   "Cast Iron Kettlebell": "铸铁壶铃",
   "Fixed Barbell Chrome EZ": "电镀固定EZ弯杆",
   "Rubber Flooring": "橡胶地垫",
+  "Rubber Flooring Tiles": "橡胶地垫砖",
+  "Gym Turf Track": "健身房人造草坪跑道",
   "Starry Sky Composite Rubber Floor": "星空复合橡胶地垫",
   "Starry Sky Composite Rubber Floor - Blue Dots": "星空复合橡胶地垫-蓝点"
 };
@@ -2070,11 +2072,157 @@ function parseCommercialInvoiceSalesOrderPdf(textValue, lines) {
   };
 }
 
+function quoteAreaProductModel(name = "", detail = {}) {
+  const text = `${name} ${detail.size || ""} ${detail.thickness || ""}`.toLowerCase();
+  const thickness = String(detail.thickness || "").match(/(\d+(?:\.\d+)?)/)?.[1] || "";
+  if (/turf|track/.test(text)) return "TURF-TRACK";
+  if (/floor/.test(text) && thickness) return `RUBF-${thickness.replace(".", "")}`;
+  if (/floor/.test(text)) return "RUBF";
+  return importedProductFallbackModel(name);
+}
+
+function normalizeAreaQuoteDetailKey(value = "") {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function areaQuoteDetails(lines) {
+  const details = new Map();
+  const start = lines.findIndex((line) => line === "Item Details");
+  if (start < 0) return details;
+  let current = null;
+  for (const line of lines.slice(start + 1)) {
+    if (/^Wder Fitness Equipment ManufacturerPage/i.test(line)) break;
+    const itemMatch = line.match(/^\d{2}\s+(.+?)\s*Amount:\s*\$?([\d,.]+)/i);
+    if (itemMatch) {
+      current = {
+        name: itemMatch[1].trim(),
+        amount: moneyNumber(itemMatch[2]),
+        size: "",
+        thickness: "",
+        quantityText: "",
+        color: ""
+      };
+      details.set(normalizeAreaQuoteDetailKey(current.name), current);
+      continue;
+    }
+    if (!current) continue;
+    if (/^Size\s*:/i.test(line)) {
+      current.size = line.replace(/^Size\s*:\s*/i, "").trim();
+      const thickness = line.match(/Thickness\s*:\s*([^|]+)/i)?.[1]?.trim();
+      if (thickness) current.thickness = thickness;
+      continue;
+    }
+    if (/^Quantity\s*:/i.test(line)) {
+      current.quantityText = line.replace(/^Quantity\s*:\s*/i, "").trim();
+      continue;
+    }
+    if (/^Color\s*:/i.test(line)) {
+      current.color = line.replace(/^Color\s*:\s*/i, "").trim();
+    }
+  }
+  return details;
+}
+
+function parseAreaQuoteSalesOrderPdf(textValue, lines) {
+  const quoteRefRaw = textValue.match(/Quote Reference:\s*((?:ORD|SO|PO|Q)-\d{8}-\d{1,3})/i)?.[1] || "";
+  const quoteRef = normalizeImportedOrderNo(quoteRefRaw);
+  const quoteDate = normalizePdfDate(textValue.match(/Quote Date:\s*([0-9/-]+)/i)?.[1]);
+  const currency = textValue.match(/Currency:\s*([A-Z]+)/i)?.[1] || "USD";
+  const leadTimeDays = Number(textValue.match(/Delivery time:\s*(\d+)/i)?.[1] || textValue.match(/Lead time:\s*(\d+)/i)?.[1] || 30);
+  const grandTotal = moneyNumber(textValue.match(/Total order amount:\s*(\$[\d,.]+)/i)?.[1])
+    || moneyNumber(textValue.match(/Grand Total\s*\([A-Z]+\)\s*\$?([\d,.]+)/i)?.[1]);
+  const productAmount = moneyNumber(textValue.match(/Subtotal\s*\$?([\d,.]+)/i)?.[1]) || grandTotal;
+  const customerValues = extractImportedCustomerValues(lines);
+  const customerName = customerValues[0] || "Imported Customer";
+  const country = customerValues.find((line) => /^[A-Za-z ]+$/.test(line) && !/@/.test(line) && line !== customerName) || customerValues.at(-1) || "";
+  const email = customerValues.find((line) => /@/.test(line)) || extractPdfEmail(lines) || "";
+  const details = areaQuoteDetails(lines);
+  const totalsStart = lines.findIndex((line) => line === "Product Totals");
+  const notesStart = lines.findIndex((line, index) => index > totalsStart && line === "Notes");
+  const productTotalLines = totalsStart >= 0
+    ? lines.slice(totalsStart + 1, notesStart > totalsStart ? notesStart : undefined)
+    : [];
+  const items = [];
+  for (const rawLine of productTotalLines) {
+    const line = rawLine.replace(/\s+/g, " ").trim();
+    if (!line || /^ProductQuantity|^Subtotal|^Discount|^Grand Total/i.test(line)) continue;
+    const match = line.match(/^(.+?)(\d+(?:\.\d+)?)\s*(?:(pc|pcs)\s*\/\s*)?(?:(\d+(?:\.\d+)?)\s*)?(m²|㎡|m2|sqm)\s*\$([\d,.]+)\s*\/\s*(?:m²|㎡|m2|sqm)\s*\$([\d,.]+)$/i);
+    if (!match) continue;
+    const productName = match[1].trim();
+    const pieceQty = match[3] ? Number(match[2]) : 0;
+    const area = Number((match[4] || match[2]).replace(/,/g, ""));
+    const unitPrice = moneyNumber(match[6]);
+    const amount = moneyNumber(match[7]);
+    const detail = details.get(normalizeAreaQuoteDetailKey(productName)) || {};
+    const specParts = [];
+    if (detail.size) specParts.push(detail.size);
+    if (detail.thickness && !specParts.join(" ").includes(detail.thickness)) specParts.push(`Thickness: ${detail.thickness}`);
+    const qtyText = detail.quantityText || (pieceQty ? `${pieceQty} pcs / ${formatWeightValue(area)} m²` : `${formatWeightValue(area)} m²`);
+    items.push({
+      productName: bilingualProductName(productName, ""),
+      model: quoteAreaProductModel(productName, detail),
+      specification: specParts.join("; ") || "按客户报价单要求",
+      qtyLabel: qtyText,
+      quantity: area,
+      unit: "sqm",
+      freightWeight: `${formatWeightValue(area)} m²`,
+      salesUnitPrice: unitPrice,
+      salesTotal: amount,
+      logoRequirement: "按客户确认要求",
+      colorRequirement: detail.color || "按客户参考图片",
+      packagingRequirement: "按客户确认要求"
+    });
+  }
+  if (!items.length) throw new Error("报价单中未识别到面积类产品明细");
+  return {
+    quoteRef,
+    quoteDate,
+    deliveryTerm: "FOB",
+    currency,
+    leadTimeDays,
+    productAmount,
+    freight: 0,
+    grandTotal,
+    customer: {
+      name: customerName,
+      company: customerName,
+      country,
+      contact: extractPdfContact(lines, customerName),
+      email,
+      whatsapp: "",
+      phone: extractPdfPhone(lines),
+      address: extractPdfAddress(lines),
+      source: "Other",
+      level: "B",
+      remark: `面积类报价 PDF 导入客户：${quoteRef || quoteRefRaw || "无报价号"}`
+    },
+    order: {
+      orderNo: quoteRef,
+      orderDate: quoteDate,
+      deliveryTerm: "FOB",
+      destinationCountry: country,
+      destinationAddress: extractPdfAddress(lines),
+      freight: 0,
+      otherFees: 0,
+      depositAmount: 0,
+      balanceAmount: grandTotal || productAmount,
+      paymentStatus: "Deposit Pending",
+      status: "Customer Confirmed",
+      expectedDeliveryDate: addDays(quoteDate, leadTimeDays),
+      remark: `面积类客户报价 PDF 导入。报价号：${quoteRef || quoteRefRaw || "-"}；币种：${currency}；产品金额：${productAmount}；总金额：${grandTotal || productAmount}`
+    },
+    items
+  };
+}
+
 function parseImportedSalesOrderPdf(textContent) {
   const textValue = String(textContent || "").replace(/\r/g, "");
   const lines = textValue.split("\n").map((line) => line.trim()).filter(Boolean);
   if (/COMMERCIAL INVOICE/i.test(textValue) && /m²|㎡|m2|sqm/i.test(textValue)) {
     return parseCommercialInvoiceSalesOrderPdf(textValue, lines);
+  }
+  if (/QUOTATION/i.test(textValue) && /Product Totals/i.test(textValue) && /m²|㎡|m2|sqm/i.test(textValue)) {
+    return parseAreaQuoteSalesOrderPdf(textValue, lines);
   }
   const rawQuoteRef = textValue.match(/(?:Quote|Order) Reference:\s*((?:ORD|SO|PO|Q)-\d{8}-\d{1,3})/i)?.[1] || "";
   const quoteRef = normalizeImportedOrderNo(rawQuoteRef);
@@ -3571,9 +3719,10 @@ async function handleApi(req, res, db, user, url, preloadedBody = null) {
       if (body.salesOrderId && !so) return json(res, 404, { error: "Sales order not found" });
       const sourceItems = body.items?.length ? body.items : so ? salesItems(db, so.id) : [];
       if (!sourceItems.length) return json(res, 400, { error: "Purchase order requires at least one product item" });
+      const preferredPoNo = body.poNo || so?.orderNo || nextNo(db.purchase_orders, "PO");
       const po = {
         id: id("po"),
-        poNo: so?.orderNo || body.poNo || nextNo(db.purchase_orders, "PO"),
+        poNo: uniquePurchaseOrderNo(db, preferredPoNo),
         salesOrderId: body.salesOrderId || "",
         factoryId: body.factoryId,
         orderDate: body.orderDate || today(),
@@ -3948,6 +4097,18 @@ function nextNo(records, prefix) {
   const date = today().replaceAll("-", "");
   const count = records.filter((item) => String(item.orderNo || item.poNo || item.reportNo || "").includes(date)).length + 1;
   return `${prefix}-${date}-${String(count).padStart(3, "0")}`;
+}
+
+function uniquePurchaseOrderNo(db, preferred) {
+  const base = String(preferred || nextNo(db.purchase_orders, "PO")).trim();
+  if (!db.purchase_orders.some((item) => item.poNo === base)) return base;
+  let index = 2;
+  let candidate = `${base}-${String(index).padStart(2, "0")}`;
+  while (db.purchase_orders.some((item) => item.poNo === candidate)) {
+    index += 1;
+    candidate = `${base}-${String(index).padStart(2, "0")}`;
+  }
+  return candidate;
 }
 
 function salesItem(orderId, raw) {

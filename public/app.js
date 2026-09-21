@@ -2061,7 +2061,22 @@ async function renderSalesOrderDetail(id) {
         <h2>工厂采购订单</h2>
         <div class="toolbar">
           <select class="select" id="factorySelect">${factories.items.map((f) => `<option value="${f.id}">${f.name}</option>`).join("")}</select>
-          <button class="btn primary" id="makePo">从客户订单生成采购单</button>
+          <button class="btn primary" id="makePo">生成所选产品采购单</button>
+        </div>
+        <div class="table-wrap" style="margin-bottom:14px">
+          <table>
+            <thead><tr><th>选择</th><th>产品</th><th>型号</th><th>数量</th><th>规格</th><th>采购单价（CNY）</th></tr></thead>
+            <tbody>
+              ${order.items.map((item) => `<tr data-split-po-item="${item.id}">
+                <td><input type="checkbox" class="split-po-check" checked></td>
+                <td>${displayValue(item.productName)}</td>
+                <td>${displayValue(item.model)}</td>
+                <td>${displayValue(item.qtyLabel || item.quantity)}</td>
+                <td>${displayValue(item.specification)}</td>
+                <td><input class="input split-po-price" type="number" min="0" step="0.01" value="${Number(item.defaultPurchasePrice || item.purchaseUnitPrice || 0)}" placeholder="可后续填写"></td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
         </div>
         ${simpleTable(order.purchaseOrders, ["poNo", "factoryName", "productionStatus", "qcStatus", "actions"], ["采购单号", "工厂", "生产状态", "质检", "操作"], (row, key) => key === "actions" ? `<button class="btn small" data-po="${row.id}">查看</button> <button class="btn small" data-chat-po="${row.id}">留言</button>` : displayValue(row[key]))}
       </div>
@@ -2082,7 +2097,15 @@ async function renderSalesOrderDetail(id) {
   });
   $("#deleteOrder")?.addEventListener("click", async () => deleteSalesOrder(order.id, order.orderNo, () => go("/admin/sales-orders")));
   $("#makePo").addEventListener("click", async () => {
-    await api("/api/purchase-orders", { method: "POST", body: JSON.stringify({ salesOrderId: order.id, factoryId: $("#factorySelect").value }) });
+    const selectedItems = $$("[data-split-po-item]").filter((row) => $(".split-po-check", row)?.checked).map((row) => {
+      const source = order.items.find((item) => item.id === row.dataset.splitPoItem);
+      return source ? { ...source, purchaseUnitPrice: Number($(".split-po-price", row)?.value || 0) } : null;
+    }).filter(Boolean);
+    if (!selectedItems.length) return alert("请至少选择一个产品分配给工厂");
+    await api("/api/purchase-orders", {
+      method: "POST",
+      body: JSON.stringify({ salesOrderId: order.id, factoryId: $("#factorySelect").value, items: selectedItems })
+    });
     renderSalesOrderDetail(order.id);
   });
   bindFiles(order);
